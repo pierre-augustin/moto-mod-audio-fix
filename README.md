@@ -28,6 +28,11 @@ Useful details:
 - `MOD_ATTACH` is sent as an **explicit** intent to `com.motorola.modservice`
   only, so the app listens to `MOD_ENUMERATION_DONE`, which requires the
   `com.motorola.mod.permission.MOD_ACCESS_INFO` permission.
+- `AudioService` resets `FOR_DOCK` to `FORCE_DIGITAL_DOCK` on every **user
+  switch** (`readDockAudioSettings()`, e.g. moving to a child's profile) and on
+  audioserver restarts. The app is therefore `android:persistent` and runs a
+  `DockWatcher` that puts `ANALOG_DOCK` back within ~3 s while the dock device
+  (the mod) is connected.
 - The mod is enumerated during boot, **before the first unlock**
   (`RUNNING_LOCKED`): the app must be `directBootAware`, otherwise the
   broadcast is dropped without any log.
@@ -75,8 +80,6 @@ binary is stored in this repo.
   reboots. It must only be opened and started.
 - The link only accepts **S16_LE / 1 channel / 48 kHz / 1024×4 periods**.
 - `setForceUse` is a hidden API (called through reflection on `AudioSystem`).
-- `AudioService` resets `FOR_DOCK` to `FORCE_DIGITAL_DOCK` (9) when audioserver
-  restarts (`onAudioServerDied`): if that happens, reattach the mod.
 - `modlinkd` runs in the `su` SELinux domain (`seclabel u:r:su:s0`), which only
   exists on **userdebug** builds. See "Upstream integration" for a proper fix.
 - A LineageOS update overwrites `/system` and `/vendor`: everything must be

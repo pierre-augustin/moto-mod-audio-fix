@@ -120,8 +120,10 @@ Cleaner alternatives I can see, and I'd welcome your view:
 - expose a `dock` switch (state 3 = LE_DESK) from the kernel while an audio mod
   is attached, so that `DockObserver` + `AudioService` set `FORCE_ANALOG_DOCK`
   on their own, including after an audioserver restart;
-- or keep a small privileged app, extended to also reapply the value when
-  audioserver restarts.
+- or keep a small privileged app. This is what the repo does now: the app is
+  `android:persistent` and re-applies `ANALOG_DOCK` within ~3 s whenever the
+  value is reset while the dock device is connected (user switches to secondary
+  profiles reset it too, through `readDockAudioSettings()`).
 
 ## Mod battery level (separate change, ready)
 

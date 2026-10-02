@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Va dans /vendor/etc/permissions/ (ou /system/etc/permissions/ selon la
+     partition où l'APK est installée). Sans ce fichier, Android refuse
+     silencieusement la permission signature|privileged même si l'app est
+     bien dans un dossier priv-app — voir README.md.
+-->
+<permissions>
+    <privapp-permissions package="dev.paugustin.modaudiofix">
+        <permission name="android.permission.MODIFY_AUDIO_ROUTING"/>
+    </privapp-permissions>
+</permissions>

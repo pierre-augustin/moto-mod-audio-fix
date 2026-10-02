@@ -2,6 +2,26 @@
 
 To: Nolen Johnson (`njohnson` on Gerrit), jro1979 (beckham maintainer)
 
+## Update (2026-10-02, evening): stock audio HAL
+
+Following the maintainer's preference for the stock audio HAL, it was tested on
+beckham set up like nash (beckham's `audio.primary.sdm660.so` from TheMuppets
+`lineage-20`, CAF-clashing libraries renamed, `ro.hardware.audio.primary`
+pointing to it; see [`../stock-hal/`](../stock-hal)). It runs without crashing
+and plays media on the mod **natively and in stereo** (`audio_mods`,
+`mod-speaker`, mod ACDB 215, MODS_MI2S opened by the HAL), so pieces 2 and 3
+below (CAF mixer paths, PCM 65 daemon) are not needed with it. Calls, speaker,
+detach/reattach all work. Still needed: `force_use(FOR_DOCK)=ANALOG_DOCK`.
+Known regression vs stock firmware: speakerphone during a call stays on the
+phone speaker (the HAL's `mod_outputs`/`mod_inputs` parameter, probably set by
+the stock mod service, is not investigated yet).
+
+Proposed next step: a beckham change modeled on nash (blobs + fixups +
+`ro.hardware.audio.primary`), and abandoning
+[505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943).
+
+The rest of this document describes the CAF HAL approach.
+
 ## Summary
 
 Audio Moto Mods (tested with a JBL SoundBoost) have been silent on beckham

@@ -14,3 +14,5 @@ health-shim/inc/
 health-shim/inc_cxx/
 health-shim/devlibs/
 health-shim/out/
+stock-hal/orig/
+stock-hal/out/

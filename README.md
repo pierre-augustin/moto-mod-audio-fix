@@ -1,89 +1,115 @@
 # Mod Audio Fix — Moto Z3 Play (beckham) / LineageOS 22.2
 
 Makes audio Moto Mods (JBL SoundBoost and similar) actually play sound on
-LineageOS 22.2, where the mod is detected but stays silent.
-It also makes the mod battery level visible again (see
-[Mod battery level](#mod-battery-level)).
+LineageOS 22.2, where the mod is detected but stays silent, and makes the mod
+battery level visible again.
 
 **Validated on 2026-10-02** on a Moto Z3 Play `beckham`, LineageOS 22.2
-userdebug, with a JBL SoundBoost: audio plays on the mod after a cold reboot
-with no manual step, including pause/resume.
+userdebug, with a JBL SoundBoost: media plays on the mod **in stereo** after a
+cold reboot with no manual step, across pause/resume, detach/reattach, calls
+and user (profile) switches.
 
-## Diagnosis
+## Recommended setup
 
-The whole low-level stack works: greybus detects the mod (`gb_audio`,
-vendor=HARMAN International, product=JBL SoundBoost), the `mods_codec` kernel
-driver reports an output (`mods_codec_out_devices=1`, 48 kHz / 16 bit), and
-Android creates the `AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET` device
-("Dock Headset"). Motorola's stock audio stack did three things that the
-LineageOS environment does not:
+| Piece | What it does | Where |
+|---|---|---|
+| **Stock audio HAL** | beckham's Motorola audio HAL, run next to the CAF one like nash does. It has native mod support: routes media to `mod-speaker`, opens the mod I2S link, uses the mod calibration, and plays in stereo | `stock-hal/` |
+| **ModAudioFix app** | keeps `force_use(FOR_DOCK)` at `ANALOG_DOCK` while the mod is attached, so the audio policy selects the dock device at all | `app/` |
+| **Health shim** | fixes the crash of the Motorola health service, so Android shows the mod battery level. **Merged in LineageOS** (2026-10-02): builds after that ship it, and `install.sh` then skips it | `health-shim/` |
 
-| # | Missing piece | Symptom | Fix |
-|---|---|---|---|
-| 1 | `setForceUse(FOR_DOCK, ANALOG_DOCK)` when the mod is attached (Motorola OEM service not present) | Audio keeps playing on the phone speaker | `ModAudioFix` app (this repo) |
-| 2 | Mixer paths for the mod device: LineageOS' CAF audio HAL maps `ANLG_DOCK_HEADSET` to the **`usb-headset`** snd device (Motorola's HAL mapped it to `mod-speaker`), and `mixer_paths.xml` has no such path | "Dock speaker" is selected in the volume panel but nothing plays; logcat: `unable to find path 'usb-headset'`, `pcm_prepare returned -1` | `device-files/mixer_paths-mod-usb-headset.patch` |
-| 3 | Opening the hostless **`00-65 MADERA-MODS`** PCM (codec AIF2 → mod I2S) during playback. Opening it is what triggers `gb_i2s_mgmt_set_cfg` and `gb_i2s_mgmt_activate_port` on the mod | Stream opens without errors but stays silent (the mod's I2S port is never activated) | `modlinkd` daemon (`native/`) |
+Known limitation: **speakerphone during a call stays on the phone speaker**
+(the HAL does not swap `voice-speaker` to the mod). The stock HAL accepts a
+`mod_outputs=…;mod_inputs=…` parameter that the stock Motorola mod service
+probably set; not investigated yet. Earpiece calls, microphone, and media after
+a call (back on the mod) all work.
 
-Useful details:
-- `MOD_ATTACH` is sent as an **explicit** intent to `com.motorola.modservice`
-  only, so the app listens to `MOD_ENUMERATION_DONE`, which requires the
-  `com.motorola.mod.permission.MOD_ACCESS_INFO` permission.
-- `AudioService` resets `FOR_DOCK` to `FORCE_DIGITAL_DOCK` on every **user
-  switch** (`readDockAudioSettings()`, e.g. moving to a child's profile) and on
-  audioserver restarts. The app is therefore `android:persistent` and runs a
-  `DockWatcher` that puts `ANALOG_DOCK` back within ~3 s while the dock device
-  (the mod) is connected.
-- The mod is enumerated during boot, **before the first unlock**
-  (`RUNNING_LOCKED`): the app must be `directBootAware`, otherwise the
-  broadcast is dropped without any log.
-- The `Mods Enable Output Devices` ALSA control becomes non-zero when the HAL
-  applies `mod-speaker` and goes back to 0 when the stream enters standby.
-  `modlinkd` uses it as its trigger, which also covers compress offload.
-- The link only runs in **mono**. Stereo is rejected by AIF2, which is most
-  likely by design given how small the mod's speaker enclosure is.
-- Dead end: adding "Dock Headset" to `<attachedDevices>` in
-  `audio_policy_configuration.xml`. It only creates a duplicate device with no
-  hardware path behind it (reverted on the phone).
+## Stock audio HAL
+
+LineageOS dropped beckham's prebuilt audio HAL in June 2024
+([395968](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/395968):
+"QPR3 enforces interface v5, but our HAL crashes with v5") and has used the CAF
+HAL since, which knows nothing about mods. nash still runs its Motorola HAL on
+22.2, renamed (`audio.primary.msm8998-moto.so`, `libtinyalsa-moto.so`) and
+selected with `ro.hardware.audio.primary`. The same recipe works on beckham:
+
+- `stock-hal/prepare.sh` downloads beckham's HAL and its libraries from
+  TheMuppets (`proprietary_vendor_motorola_beckham`, `lineage-20` branch, the
+  last one that had them), checks their SHA-256, and renames the ones that also
+  exist in CAF form with **same-length names edited in place**
+  (`audio.primary.sdm66m.so`, `libtinymoto.so`, `libaudiormoto.so`). That avoids
+  restructuring the ELF files: LineageOS pins beckham to patchelf 0.9 because
+  newer versions break some 32-bit blobs.
+- `install.sh` puts them in `/vendor/lib` and adds
+  `ro.hardware.audio.primary=sdm66m` to `/vendor/build.prop` (backed up as
+  `.orig`).
+- It runs with no crash: the QPR3 interface v5 issue seems gone, like on nash.
+
+What the stock HAL does natively (logcat, tag `audio_mods`):
+```
+audio_mods: mod's supported usecases: output=0x1e, input=0x0
+audio_mods: mods_get_speaker_snd_device(): Selecting device 53 instead of 2
+audio_hw_primary: enable_snd_device: snd_device(53: mod-speaker)
+msm8974_platform: platform_check_playback_backend_cfg: MODs BE configured as bit_width(16) sample_rate(48000) channels(2)
+```
+and in `dmesg`: `gb_i2s_mgmt_activate_port: opcode: 0x0A, ret: 0`.
+
+## Why force_use is still needed
+
+`AudioService` sets `FOR_DOCK` to `FORCE_DIGITAL_DOCK` from
+`DOCK_AUDIO_MEDIA_ENABLED` at boot (`readDockAudioSettings()`), on every **user
+switch**, and on audioserver restarts (`onAudioServerDied()`). The legacy
+audio policy only selects `AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET` for media when
+`FOR_DOCK == FORCE_ANALOG_DOCK`. With the default value, the stock HAL gets
+`speaker` and plays on the phone. The app:
+- listens to `com.motorola.mod.action.MOD_ENUMERATION_DONE` / `MOD_DETACH`
+  (`MOD_ATTACH` is an explicit intent to `com.motorola.modservice` only); this
+  needs the `com.motorola.mod.permission.MOD_ACCESS_INFO` permission;
+- is `directBootAware`: the mod is enumerated before the first unlock;
+- is `android:persistent` and runs a `DockWatcher` that puts `ANALOG_DOCK` back
+  within ~3 s whenever it is reset while the dock device is connected.
 
 ## Mod battery level
 
-Separate issue, same mod: Android never shows the mod battery level
-(`mod_level=-1`, ModService logs "invalid battery level. The battery is
-detached?").
+Android never showed the mod battery level (`mod_level=-1`, ModService: "invalid
+battery level. The battery is detached?").
+`motorola.hardware.health@1.0-service` reads the mod battery from
+`/sys/class/power_supply/gb_battery`, but also calls
+`android.hardware.health@2.0::IHealth::getService()` **without a null check**,
+then `IHealth::getCapacity()`. LineageOS 22.2 only ships the AIDL health HAL, so
+the blob crashed on every read. `libmothealth_shim` interposes `getService()`
+and returns a minimal in-process `IHealth` whose `getCapacity()` reads
+`/sys/class/power_supply/battery/capacity`; it is added to the blob's
+`DT_NEEDED`. Upstream since 2026-10-02
+([505961](https://review.lineageos.org/c/LineageOS/android_device_motorola_msm8998-common/+/505961),
+[505951](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505951)).
 
-- `motorola.hardware.health@1.0-service` (Motorola blob) reads the mod battery
-  from `/sys/class/power_supply/gb_battery`, but also calls
-  `android.hardware.health@2.0::IHealth::getService()` **without a null
-  check**, then `IHealth::getCapacity()` to get the main battery level.
-- LineageOS 22.2 only ships the AIDL health HAL, so `getService()` returns
-  nullptr and the blob crashes every time it is asked for the mod battery
-  (`BatteryService: getModBatteryProperties fail!`).
-- Fix: `health-shim/libmothealth_shim.so` interposes `IHealth::getService()`
-  and returns a minimal in-process `IHealth` whose `getCapacity()` reads
-  `/sys/class/power_supply/battery/capacity`. It is added to the blob's
-  `DT_NEEDED` with `patchelf --add-needed`, the same way LineageOS already adds
-  `libbase_shim.so` to this blob.
+The kernel `gb_battery` driver asks the mod firmware for the percentage on every
+read, so a mod left unused for months really reports 0 % until it is charged.
+On a charger, the phone and the mod charge together; on a weak USB port the mod
+only charges once the phone is full (Motorola charger logic, `RCV_SECOND`).
 
-Note: the kernel `gb_battery` driver asks the mod firmware for the percentage
-on every read, so a mod left unused for months really reports 0 % until it is
-charged.
+## Alternative: CAF audio HAL (`--caf`)
 
-`health-shim/build.sh` builds the shim with the NDK against the platform
-headers (fetched from the AOSP VNDK snapshots) and the phone's own libraries,
-and produces a patched copy of the blob pulled from the phone. No Motorola
-binary is stored in this repo.
+Before the stock HAL was tested, audio was made to work with the CAF HAL. It is
+kept as an alternative (no proprietary audio blob), with two drawbacks: mono
+only, and a daemon running as `su` (userdebug builds only). With the CAF HAL,
+three pieces are needed:
 
-## ⚠️ Warnings
+| # | Missing piece | Symptom | Fix |
+|---|---|---|---|
+| 1 | `force_use(FOR_DOCK, ANALOG_DOCK)` | Audio keeps playing on the phone speaker | ModAudioFix app (same as above) |
+| 2 | Mixer paths: the CAF HAL maps `ANLG_DOCK_HEADSET` to the `usb-headset` snd device, which has no path | "Dock speaker" selected but nothing plays; `unable to find path 'usb-headset'`, `pcm_prepare returned -1` | `device-files/mixer_paths-mod-usb-headset.patch` |
+| 3 | Opening the hostless `00-65 MADERA-MODS` PCM (codec AIF2 → mod I2S) during playback, which triggers `gb_i2s_mgmt_set_cfg` / `gb_i2s_mgmt_activate_port` | Stream runs but stays silent | `modlinkd` daemon (`native/`), following the `Mods Enable Output Devices` control |
 
+Notes for this approach:
 - **Never write data to PCM 65** (`tinyplay ... -d 65`): it is a hostless link
   with no buffer, the kernel oopses in `__arch_copy_from_user` and the phone
   reboots. It must only be opened and started.
-- The link only accepts **S16_LE / 1 channel / 48 kHz / 1024×4 periods**.
-- `setForceUse` is a hidden API (called through reflection on `AudioSystem`).
-- `modlinkd` runs in the `su` SELinux domain (`seclabel u:r:su:s0`), which only
-  exists on **userdebug** builds. See "Upstream integration" for a proper fix.
-- A LineageOS update overwrites `/system` and `/vendor`: everything must be
-  reinstalled after each update.
+- The link only accepts S16_LE / 1 channel / 48 kHz / 1024×4 periods.
+- `modlinkd` and the stock HAL must not run together (the stock HAL opens the
+  link itself): `install.sh` removes `modlinkd` in stock mode.
+- Dead end: adding "Dock Headset" to `<attachedDevices>` in
+  `audio_policy_configuration.xml` only creates a duplicate device.
 
 ## Build
 
@@ -91,9 +117,13 @@ binary is stored in this repo.
 export JAVA_HOME=~/android-toolchain/jdk-17.0.20.1+1
 export ANDROID_HOME=~/android-toolchain/android-sdk
 gradle assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
-./native/build.sh             # → native/modlinkd, native/modlink (NDK r27c)
+./stock-hal/prepare.sh        # → stock-hal/out/ (downloads and checks the stock HAL)
 ./health-shim/build.sh        # → health-shim/out/ (needs patchelf and the phone on adb)
+./native/build.sh             # → native/modlinkd, native/modlink (CAF approach only)
 ```
+
+No Motorola binary is stored in this repo: `stock-hal/prepare.sh` and
+`health-shim/build.sh` fetch them (TheMuppets, or the phone itself).
 
 ## Install
 
@@ -103,30 +133,34 @@ gradle assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
 sudo apt install patchelf     # once
 ./install.sh --build          # build everything, install, reboot and check
 ./install.sh                  # same, reusing what is already built
+./install.sh --caf            # CAF HAL approach instead of the stock HAL
 ```
 
-The script backs up `mixer_paths.xml` and the Motorola health blob as `.orig`
-on the phone and always starts from those backups, so it can be run again
-safely. It ends with a reboot and a check of each fix:
+The script backs up `build.prop`, `mixer_paths.xml` and the Motorola health
+blob as `.orig` on the phone and always starts from those backups, so it can be
+run again and switched between modes safely. It ends with a reboot and a check
+of each piece:
 
 ```
 ==> Checking
   OK    ModAudioFix permission
-  OK    mixer_paths usb-headset paths
-  OK    modlinkd service
+  OK    stock audio HAL selected
+  OK    stock audio HAL loaded
+  OK    modlinkd not running
   OK    health shim loaded
   OK    force_use dock (mod attached)
 ```
 
-If it stops with "/vendor is still read-only", reboot the phone once (the first
+Prerequisite: Developer options → Rooted debugging (ADB only). `adb remount`
+prints "Remount failed" because of unrelated partitions (`bt_firmware`, `dsp`,
+`fsg`), but `/` and `/vendor` are remounted read-write anyway. If the script
+stops with "/vendor is still read-only", reboot the phone once (the first
 `adb remount` after an update needs it) and run it again.
 
-### By hand
+A LineageOS update overwrites `/system` and `/vendor`: run `./install.sh` again
+after each update.
 
-Prerequisite: Developer options → Rooted debugging (ADB only).
-`adb remount` prints "Remount failed" because of unrelated partitions
-(`bt_firmware`, `dsp`, `fsg`), but `/` and `/vendor` are remounted read-write
-anyway: do not chain the next commands with `&&`.
+### By hand (stock HAL)
 
 ```bash
 adb root
@@ -137,20 +171,16 @@ adb shell mkdir -p /system/priv-app/ModAudioFix
 adb push app/build/outputs/apk/debug/app-debug.apk /system/priv-app/ModAudioFix/ModAudioFix.apk
 adb push device-files/privapp-permissions-modaudiofix.xml /system/etc/permissions/
 
-# 2. usb-headset → mod mixer paths (keeping a backup of the original)
-adb shell cp -p /vendor/etc/mixer_paths.xml /vendor/etc/mixer_paths.xml.orig
-adb pull /vendor/etc/mixer_paths.xml /tmp/mixer_paths.xml
-patch /tmp/mixer_paths.xml device-files/mixer_paths-mod-usb-headset.patch
-adb push /tmp/mixer_paths.xml /vendor/etc/mixer_paths.xml
+# 2. Stock audio HAL
+adb push stock-hal/out/audio.primary.sdm66m.so /vendor/lib/hw/
+for f in libtinymoto.so libaudiormoto.so libmotaudioutils.so libunshorten.so libtinycompress_vendor.so; do
+    adb push stock-hal/out/$f /vendor/lib/
+done
+adb shell "cd /vendor/lib && chmod 644 hw/audio.primary.sdm66m.so libtinymoto.so libaudiormoto.so libmotaudioutils.so libunshorten.so libtinycompress_vendor.so && \
+  chcon u:object_r:vendor_file:s0 hw/audio.primary.sdm66m.so libtinymoto.so libaudiormoto.so libmotaudioutils.so libunshorten.so libtinycompress_vendor.so"
+adb shell "cp -p /vendor/build.prop /vendor/build.prop.orig; echo ro.hardware.audio.primary=sdm66m >> /vendor/build.prop"
 
-# 3. modlinkd daemon
-adb push native/modlinkd /vendor/bin/modlinkd
-adb push device-files/modlinkd.rc /vendor/etc/init/modlinkd.rc
-adb shell "chmod 755 /vendor/bin/modlinkd; chmod 644 /vendor/etc/init/modlinkd.rc; \
-  chcon u:object_r:vendor_file:s0 /vendor/bin/modlinkd; \
-  chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/modlinkd.rc"
-
-# 4. Mod battery level: health shim + patched Motorola health blob
+# 3. Mod battery level (only on builds before 2026-10-02)
 adb shell cp -p /vendor/bin/hw/motorola.hardware.health@1.0-service /vendor/bin/hw/motorola.hardware.health@1.0-service.orig
 adb push health-shim/out/libmothealth_shim.so /vendor/lib64/
 adb push health-shim/out/motorola.hardware.health@1.0-service /vendor/bin/hw/
@@ -164,23 +194,14 @@ adb reboot
 ## Check
 
 ```bash
+adb shell getprop ro.hardware.audio.primary                        # → sdm66m
 adb shell dumpsys media.audio_policy | grep "Force use for dock"   # → 8
-adb shell getprop init.svc.modlinkd                                # → running
-adb logcat | grep -E "ModAudioFix|modlinkd"
+adb logcat | grep -E "ModAudioFix|audio_mods|modLevel"
 ```
 
-Expected during playback:
-```
-ModAudioFix: setForceUse(FOR_DOCK, 8) OK via AudioSystem
-modlinkd: mod output devices=0x1 -> link opened
-```
-and in the kernel log (`dmesg`): `gb_i2s_mgmt_activate_port: opcode: 0x0A, ret: 0`.
-
-Mod battery level: `adb logcat | grep -E "getModBatteryProperties|modLevel"`
-should show `modLevel = <percent>` and no `getModBatteryProperties fail!`.
-
-`native/modlink` is the manual debugging tool that opens the link once
-(`/data/local/tmp/modlink 65 1 48000`, Ctrl-C to close it).
+Expected: `ModAudioFix: setForceUse(FOR_DOCK, 8) OK`, then during playback
+`audio_mods: … Selecting device 53 instead of 2`, and `modLevel = <percent>`
+with no `getModBatteryProperties fail!`.
 
 ## Uninstall
 
@@ -188,25 +209,21 @@ should show `modLevel = <percent>` and no `getModBatteryProperties fail!`.
 adb root
 adb remount
 adb shell rm -rf /system/priv-app/ModAudioFix /system/etc/permissions/privapp-permissions-modaudiofix.xml
-adb shell rm /vendor/bin/modlinkd /vendor/etc/init/modlinkd.rc
-adb shell cp -p /vendor/etc/mixer_paths.xml.orig /vendor/etc/mixer_paths.xml
-adb shell rm /vendor/lib64/libmothealth_shim.so
-adb shell mv /vendor/bin/hw/motorola.hardware.health@1.0-service.orig /vendor/bin/hw/motorola.hardware.health@1.0-service
+adb shell cp -p /vendor/build.prop.orig /vendor/build.prop
+adb shell "cd /vendor/lib && rm hw/audio.primary.sdm66m.so libtinymoto.so libaudiormoto.so libmotaudioutils.so libunshorten.so libtinycompress_vendor.so"
+adb shell "[ -f /vendor/etc/mixer_paths.xml.orig ] && cp -p /vendor/etc/mixer_paths.xml.orig /vendor/etc/mixer_paths.xml"
+adb shell rm -f /vendor/bin/modlinkd /vendor/etc/init/modlinkd.rc
+adb shell rm -f /vendor/lib64/libmothealth_shim.so
+adb shell "[ -f /vendor/bin/hw/motorola.hardware.health@1.0-service.orig ] && mv /vendor/bin/hw/motorola.hardware.health@1.0-service.orig /vendor/bin/hw/motorola.hardware.health@1.0-service"
 adb reboot
 ```
 
 ## Upstream integration
 
-See [`upstream/`](upstream) for the proposal to the LineageOS beckham
-maintainers (`mixer_paths.xml` patch and health shim changes submitted on
-Gerrit, `modlinkd` vendor module draft).
-
-
-The proper version of these three fixes, on the device tree / HAL side:
-1. **mixer_paths**: add the `usb-headset` paths (patch above), or better, map
-   `ANLG_DOCK_HEADSET` to a `mod-speaker` snd device in the HAL.
-2. **PCM 65**: open the hostless `MADERA-MODS` link in the audio HAL
-   (`pcm_open` + `pcm_start`, no writes) when the route includes the mod, and
-   close it on standby, instead of the daemon.
-3. **Dock force_use**: set it on the framework/HAL side when the dock device
-   connects, instead of the app.
+See [`upstream/`](upstream): the health shim is merged; for audio, the beckham
+maintainer prefers the stock HAL ("wayyyy better if you can make that work"),
+so the next step is a beckham change modeled on nash (blobs, fixups,
+`ro.hardware.audio.primary`), plus a decision on `force_use` (app vs
+framework/overlay). The CAF `mixer_paths` change
+([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943))
+would then be abandoned.

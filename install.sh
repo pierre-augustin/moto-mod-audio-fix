@@ -1,29 +1,35 @@
 #!/bin/sh
 # Install (or reinstall after a LineageOS update) every fix from this repo on a
 # Moto Z3 Play (beckham) running LineageOS 22.2 userdebug:
-#   1. ModAudioFix app (force_use dock = ANALOG_DOCK)
-#   2. mixer_paths.xml usb-headset -> mod paths
-#   3. modlinkd daemon (keeps the MADERA-MODS PCM link open during playback)
-#   4. health shim + patched Motorola health blob (mod battery level)
+#   1. ModAudioFix app (force_use dock = ANALOG_DOCK, kept across user switches)
+#   2. Audio HAL for the mod, either:
+#      - stock (default): beckham's Motorola audio HAL, set up like nash
+#        (native mod support, stereo); see stock-hal/prepare.sh
+#      - caf (--caf): CAF HAL + usb-headset mixer paths + modlinkd daemon
+#   3. health shim + patched Motorola health blob (mod battery level), skipped
+#      when the LineageOS build already ships it (merged upstream)
 #
-# Safe to run again: mixer_paths.xml and the health blob are always rebuilt
-# from the .orig backups kept on the phone.
+# Safe to run again: build.prop, mixer_paths.xml and the health blob are always
+# rebuilt from the .orig backups kept on the phone.
 #
-# Usage: ./install.sh [--build] [--no-reboot]
+# Usage: ./install.sh [--build] [--caf] [--no-reboot]
 #   --build      rebuild the APK, modlinkd and the health shim first
+#   --caf        use the CAF HAL approach instead of the stock HAL
 #   --no-reboot  do not reboot / verify at the end
 #
-# Needs: adb, patchelf (for the health blob), Developer options ->
-# "Rooted debugging" enabled, and the phone connected over USB.
+# Needs: adb, patchelf (for the health blob), curl and python3 (stock HAL),
+# Developer options -> "Rooted debugging" enabled, phone connected over USB.
 set -e
 cd "$(dirname "$0")"
 
 BUILD=0
 REBOOT=1
+AUDIO=stock
 for arg in "$@"; do
     case "$arg" in
         --build) BUILD=1 ;;
         --no-reboot) REBOOT=0 ;;
+        --caf) AUDIO=caf ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -33,6 +39,9 @@ MODLINKD=native/modlinkd
 SHIM=health-shim/out/libmothealth_shim.so
 BLOB=/vendor/bin/hw/motorola.hardware.health@1.0-service
 MIXER=/vendor/etc/mixer_paths.xml
+PROP=/vendor/build.prop
+STOCK_PROP=ro.hardware.audio.primary=sdm66m
+STOCK_LIBS="libtinymoto.so libaudiormoto.so libmotaudioutils.so libunshorten.so libtinycompress_vendor.so"
 
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -57,15 +66,29 @@ if [ "$BUILD" = 1 ]; then
     gradle assembleDebug   # needs JAVA_HOME and ANDROID_HOME, see README
     ./native/build.sh
 fi
-step "Building the health shim and patching the Motorola blob"
-# Back up the pristine blob first: build.sh patches a copy of the .orig.
 adb remount >/dev/null 2>&1 || true
-sh_adb "[ -f $BLOB.orig ] || cp -p $BLOB $BLOB.orig"
-rm -rf health-shim/devlibs   # libraries may change with each LineageOS update
-./health-shim/build.sh
+# LineageOS builds after 2026-10-02 add libmothealth_shim to the blob themselves.
+HEALTH=1
+if [ "$(sh_adb "[ -f $BLOB.orig ] || grep -c libmothealth_shim.so $BLOB")" -gt 0 ] 2>/dev/null; then
+    HEALTH=0
+    echo "Health shim already shipped by this LineageOS build: skipping it"
+fi
+if [ "$HEALTH" = 1 ]; then
+    step "Building the health shim and patching the Motorola blob"
+    # Back up the pristine blob first: build.sh patches a copy of the .orig.
+    sh_adb "[ -f $BLOB.orig ] || cp -p $BLOB $BLOB.orig"
+    rm -rf health-shim/devlibs   # libraries may change with each LineageOS update
+    ./health-shim/build.sh
+fi
+if [ "$AUDIO" = stock ]; then
+    step "Preparing the stock audio HAL"
+    ./stock-hal/prepare.sh
+fi
 
-for f in "$APK" "$MODLINKD" "$SHIM" health-shim/out/motorola.hardware.health@1.0-service; do
-    [ -f "$f" ] || die "missing $f (run with --build, see README)"
+for f in "$APK"; do [ -f "$f" ] || die "missing $f (run with --build, see README)"; done
+[ "$AUDIO" = caf ] && { [ -f "$MODLINKD" ] || die "missing $MODLINKD (run with --build)"; }
+[ "$HEALTH" = 1 ] && for f in "$SHIM" health-shim/out/motorola.hardware.health@1.0-service; do
+    [ -f "$f" ] || die "missing $f"
 done
 
 step "Remounting /system and /vendor read-write"
@@ -74,34 +97,47 @@ adb remount >/dev/null 2>&1 || true
 [ "$(sh_adb 'touch /vendor/.rw_test 2>/dev/null && rm /vendor/.rw_test && echo ok')" = ok ] ||
     die "/vendor is still read-only: reboot the phone once (first remount after an update) and run again"
 
-step "1/4 ModAudioFix app"
+step "1/3 ModAudioFix app"
 sh_adb "mkdir -p /system/priv-app/ModAudioFix && chmod 755 /system/priv-app/ModAudioFix"
 adb push "$APK" /system/priv-app/ModAudioFix/ModAudioFix.apk >/dev/null
 adb push device-files/privapp-permissions-modaudiofix.xml /system/etc/permissions/ >/dev/null
 sh_adb "chmod 644 /system/priv-app/ModAudioFix/ModAudioFix.apk /system/etc/permissions/privapp-permissions-modaudiofix.xml"
 
-step "2/4 mixer_paths.xml"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
 sh_adb "[ -f $MIXER.orig ] || cp -p $MIXER $MIXER.orig"
-adb pull "$MIXER.orig" "$tmp/mixer_paths.xml" >/dev/null
-patch -s "$tmp/mixer_paths.xml" device-files/mixer_paths-mod-usb-headset.patch
-adb push "$tmp/mixer_paths.xml" "$MIXER" >/dev/null
-sh_adb "chmod 644 $MIXER && chcon u:object_r:vendor_configs_file:s0 $MIXER"
+sh_adb "[ -f $PROP.orig ] || cp -p $PROP $PROP.orig"
+if [ "$AUDIO" = stock ]; then
+    step "2/3 Stock audio HAL"
+    adb push stock-hal/out/audio.primary.sdm66m.so /vendor/lib/hw/ >/dev/null
+    for f in $STOCK_LIBS; do adb push "stock-hal/out/$f" /vendor/lib/ >/dev/null; done
+    sh_adb "cd /vendor/lib && chmod 644 hw/audio.primary.sdm66m.so $STOCK_LIBS && \
+        chcon u:object_r:vendor_file:s0 hw/audio.primary.sdm66m.so $STOCK_LIBS"
+    sh_adb "cp -p $PROP.orig $PROP && echo $STOCK_PROP >> $PROP"
+    # The stock HAL opens the mod link and has its own mod paths: drop the CAF pieces.
+    sh_adb "cp -p $MIXER.orig $MIXER; rm -f /vendor/bin/modlinkd /vendor/etc/init/modlinkd.rc"
+else
+    step "2/3 CAF audio HAL: mixer_paths.xml + modlinkd"
+    sh_adb "cp -p $PROP.orig $PROP"   # back to the CAF HAL
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    adb pull "$MIXER.orig" "$tmp/mixer_paths.xml" >/dev/null
+    patch -s "$tmp/mixer_paths.xml" device-files/mixer_paths-mod-usb-headset.patch
+    adb push "$tmp/mixer_paths.xml" "$MIXER" >/dev/null
+    sh_adb "chmod 644 $MIXER && chcon u:object_r:vendor_configs_file:s0 $MIXER"
+    adb push "$MODLINKD" /vendor/bin/modlinkd >/dev/null
+    adb push device-files/modlinkd.rc /vendor/etc/init/modlinkd.rc >/dev/null
+    sh_adb "chmod 755 /vendor/bin/modlinkd && chmod 644 /vendor/etc/init/modlinkd.rc && \
+        chcon u:object_r:vendor_file:s0 /vendor/bin/modlinkd && \
+        chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/modlinkd.rc"
+fi
 
-step "3/4 modlinkd"
-adb push "$MODLINKD" /vendor/bin/modlinkd >/dev/null
-adb push device-files/modlinkd.rc /vendor/etc/init/modlinkd.rc >/dev/null
-sh_adb "chmod 755 /vendor/bin/modlinkd && chmod 644 /vendor/etc/init/modlinkd.rc && \
-    chcon u:object_r:vendor_file:s0 /vendor/bin/modlinkd && \
-    chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/modlinkd.rc"
-
-step "4/4 Health shim"
+if [ "$HEALTH" = 1 ]; then
+step "3/3 Health shim"
 adb push "$SHIM" /vendor/lib64/libmothealth_shim.so >/dev/null
 adb push health-shim/out/motorola.hardware.health@1.0-service "$BLOB" >/dev/null
 sh_adb "chmod 644 /vendor/lib64/libmothealth_shim.so && chmod 755 $BLOB && \
     chcon u:object_r:vendor_file:s0 /vendor/lib64/libmothealth_shim.so && \
     chcon u:object_r:hal_health_default_exec:s0 $BLOB"
+fi
 
 if [ "$REBOOT" = 0 ]; then
     step "Done. Reboot the phone to apply."
@@ -124,8 +160,15 @@ check() {
 }
 check "ModAudioFix permission" \
     "$(sh_adb dumpsys package dev.paugustin.modaudiofix | grep -c 'MODIFY_AUDIO_ROUTING: granted=true')" 1
-check "mixer_paths usb-headset paths" "$(sh_adb "grep -c 'path name=\"usb-headset\"' $MIXER")" 1
-check "modlinkd service" "$(sh_adb getprop init.svc.modlinkd)" running
+if [ "$AUDIO" = stock ]; then
+    check "stock audio HAL selected" "$(sh_adb getprop ro.hardware.audio.primary)" sdm66m
+    check "stock audio HAL loaded" \
+        "$(sh_adb 'grep -c audio.primary.sdm66m /proc/$(pidof android.hardware.audio.service)/maps' | sed 's/^[1-9][0-9]*$/yes/')" yes
+    check "modlinkd not running" "$(sh_adb getprop init.svc.modlinkd | sed 's/^stopped$//')" ""
+else
+    check "mixer_paths usb-headset paths" "$(sh_adb "grep -c 'path name=\"usb-headset\"' $MIXER")" 1
+    check "modlinkd service" "$(sh_adb getprop init.svc.modlinkd)" running
+fi
 check "health shim loaded" \
     "$(sh_adb 'grep -c mothealth_shim /proc/$(pidof motorola.hardware.health@1.0-service)/maps' | sed 's/^[1-9][0-9]*$/yes/')" yes
 if [ "$(sh_adb cat /sys/class/power_supply/gb_battery/capacity 2>/dev/null)" ]; then

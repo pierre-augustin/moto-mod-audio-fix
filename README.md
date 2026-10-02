@@ -94,6 +94,32 @@ gradle assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
 
 ## Install
 
+### With the script (recommended, also after every LineageOS update)
+
+```bash
+sudo apt install patchelf     # once
+./install.sh --build          # build everything, install, reboot and check
+./install.sh                  # same, reusing what is already built
+```
+
+The script backs up `mixer_paths.xml` and the Motorola health blob as `.orig`
+on the phone and always starts from those backups, so it can be run again
+safely. It ends with a reboot and a check of each fix:
+
+```
+==> Checking
+  OK    ModAudioFix permission
+  OK    mixer_paths usb-headset paths
+  OK    modlinkd service
+  OK    health shim loaded
+  OK    force_use dock (mod attached)
+```
+
+If it stops with "/vendor is still read-only", reboot the phone once (the first
+`adb remount` after an update needs it) and run it again.
+
+### By hand
+
 Prerequisite: Developer options → Rooted debugging (ADB only).
 `adb remount` prints "Remount failed" because of unrelated partitions
 (`bt_firmware`, `dsp`, `fsg`), but `/` and `/vendor` are remounted read-write

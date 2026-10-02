@@ -17,8 +17,8 @@ android {
 
     buildTypes {
         debug {
-            // Pas d'obfuscation : on veut pouvoir relire les logs/stacktraces
-            // facilement pendant la mise au point sur le vrai device.
+            // No obfuscation: keep logs and stack traces readable while
+            // debugging on the real device.
             minifyEnabled false
         }
     }

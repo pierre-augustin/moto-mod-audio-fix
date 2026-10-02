@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-     Va dans /vendor/etc/permissions/ (ou /system/etc/permissions/ selon la
-     partition où l'APK est installée). Sans ce fichier, Android refuse
-     silencieusement la permission signature|privileged même si l'app est
-     bien dans un dossier priv-app — voir README.md.
+     Goes to /system/etc/permissions/ (same partition as the priv-app APK).
+     Without it, Android silently denies the signature|privileged permission
+     even though the app lives in a priv-app directory. See README.md.
 -->
 <permissions>
     <privapp-permissions package="dev.paugustin.modaudiofix">

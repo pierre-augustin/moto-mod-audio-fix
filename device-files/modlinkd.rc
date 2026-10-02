@@ -1,0 +1,6 @@
+# Keeps the MADERA-MODS hostless PCM link open while audio is routed to a Moto Mod.
+service modlinkd /vendor/bin/modlinkd
+    class late_start
+    user root
+    group audio
+    seclabel u:r:su:s0

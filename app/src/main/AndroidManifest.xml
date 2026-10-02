@@ -2,29 +2,43 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-         Permission signature|privileged : n'a d'effet que si cette appli est
-         installée comme application système privilégiée (vendor/priv-app)
-         ET listée dans un fichier de whitelist privapp-permissions. Voir
-         README.md et device-files/privapp-permissions-modaudiofix.xml.
+         signature|privileged permission: only granted when the app is
+         installed as a privileged system app (/system/priv-app) AND
+         whitelisted in a privapp-permissions file. See README.md and
+         device-files/privapp-permissions-modaudiofix.xml.
     -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_ROUTING" />
 
+    <!--
+         "normal" protection level (auto-granted, no whitelist needed):
+         required to receive the com.motorola.mod.action.* broadcasts sent by
+         com.motorola.modservice. Without it the broadcast is filtered out
+         silently, with no log at all.
+    -->
+    <uses-permission android:name="com.motorola.mod.permission.MOD_ACCESS_INFO" />
+
     <application
+        android:directBootAware="true"
         android:label="Mod Audio Fix"
         android:allowBackup="false"
         android:icon="@android:drawable/ic_lock_silent_mode_off">
 
         <!--
-             android:directBootAware pas nécessaire ici. android:exported=true
-             requis pour recevoir une diffusion envoyée par un autre package
-             (com.motorola.modservice).
+             directBootAware is REQUIRED: the mod is enumerated during boot,
+             before the first unlock (user state RUNNING_LOCKED). Without it
+             Android does not start the app and MOD_ENUMERATION_DONE is lost
+             (broadcast record shows no receiver). The app uses no
+             credential-encrypted storage.
+             exported=true is required to receive a broadcast sent by another
+             package (com.motorola.modservice).
         -->
         <receiver
             android:name=".ModAttachReceiver"
             android:exported="true"
-            android:enabled="true">
+            android:enabled="true"
+            android:directBootAware="true">
             <intent-filter>
-                <action android:name="com.motorola.mod.action.MOD_ATTACH" />
+                <action android:name="com.motorola.mod.action.MOD_ENUMERATION_DONE" />
                 <action android:name="com.motorola.mod.action.MOD_DETACH" />
             </intent-filter>
         </receiver>

@@ -1,0 +1,8 @@
+cc_binary {
+    name: "modlinkd",
+    vendor: true,
+    srcs: ["modlinkd.c"],
+    shared_libs: ["liblog"],
+    init_rc: ["modlinkd.rc"],
+    cflags: ["-Wall", "-Werror"],
+}

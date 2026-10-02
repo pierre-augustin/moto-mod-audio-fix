@@ -45,6 +45,8 @@ Useful details:
   reboots. It must only be opened and started.
 - The link only accepts **S16_LE / 1 channel / 48 kHz / 1024×4 periods**.
 - `setForceUse` is a hidden API (called through reflection on `AudioSystem`).
+- `AudioService` resets `FOR_DOCK` to `FORCE_DIGITAL_DOCK` (9) when audioserver
+  restarts (`onAudioServerDied`): if that happens, reattach the mod.
 - `modlinkd` runs in the `su` SELinux domain (`seclabel u:r:su:s0`), which only
   exists on **userdebug** builds. See "Upstream integration" for a proper fix.
 - A LineageOS update overwrites `/system` and `/vendor`: everything must be
@@ -120,7 +122,11 @@ adb shell cp -p /vendor/etc/mixer_paths.xml.orig /vendor/etc/mixer_paths.xml
 adb reboot
 ```
 
-## Upstream integration (to propose to the LineageOS beckham maintainer)
+## Upstream integration
+
+See [`upstream/`](upstream) for the proposal to the LineageOS beckham
+maintainers (ready `mixer_paths.xml` patch, `modlinkd` vendor module draft).
+
 
 The proper version of these three fixes, on the device tree / HAL side:
 1. **mixer_paths**: add the `usb-headset` paths (patch above), or better, map

@@ -1,0 +1,7 @@
+type modlinkd, domain;
+type modlinkd_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(modlinkd)
+
+# Poll "Mods Enable Output Devices" and open/start the MADERA-MODS PCM
+allow modlinkd audio_device:dir r_dir_perms;
+allow modlinkd audio_device:chr_file rw_file_perms;

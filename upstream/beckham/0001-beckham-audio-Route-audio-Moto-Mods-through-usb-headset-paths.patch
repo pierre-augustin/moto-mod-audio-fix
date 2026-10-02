@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Fri, 2 Oct 2026 15:30:00 +0200
+Subject: [PATCH] beckham: audio: Route audio Moto Mods through usb-headset paths
+
+The CAF audio HAL maps AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET, the device the
+mod service connects for audio mods (e.g. JBL SoundBoost), to
+SND_DEVICE_OUT_USB_HEADSET. mixer_paths.xml has no "usb-headset" path, so
+the stream fails to start ("unable to find path 'usb-headset'",
+"pcm_prepare returned -1") and nothing plays on the mod.
+
+Alias the usb-headset paths to the existing mod paths, which route
+SLIMBUS_0_RX to the codec AIF2 and set "Mods Enable Output Devices".
+
+Test: JBL SoundBoost attached, media playback selects "usb-headset" and
+applies "deep-buffer-playback usb-headset" without errors.
+
+---
+--- a/audio/mixer_paths.xml
++++ b/audio/mixer_paths.xml
+@@ -1473,4 +1473,22 @@
+ 		<path name="mod-headset-mic" />
+ 		<ctl name="Mods Set Capture Use Case" value="Voice-Rec" />
+ 	</path>
++
++	<!-- Audio Moto Mods: the CAF audio HAL maps AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET
++	     (the device connected for the mod) to SND_DEVICE_OUT_USB_HEADSET -->
++	<path name="usb-headset">
++		<path name="mod-speaker" />
++	</path>
++
++	<path name="deep-buffer-playback usb-headset">
++		<path name="deep-buffer-playback mod" />
++	</path>
++
++	<path name="low-latency-playback usb-headset">
++		<path name="low-latency-playback mod" />
++	</path>
++
++	<path name="compress-offload-playback usb-headset">
++		<path name="compress-offload-playback mod" />
++	</path>
+ </mixer>

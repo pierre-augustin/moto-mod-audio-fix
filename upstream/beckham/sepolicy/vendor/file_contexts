@@ -1,0 +1,1 @@
+/(vendor|system/vendor)/bin/modlinkd                        u:object_r:modlinkd_exec:s0

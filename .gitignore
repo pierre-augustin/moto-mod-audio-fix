@@ -10,3 +10,7 @@ captures/
 .cxx/
 native/modlinkd
 native/modlink
+health-shim/inc/
+health-shim/inc_cxx/
+health-shim/devlibs/
+health-shim/out/

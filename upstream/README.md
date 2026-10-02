@@ -123,12 +123,51 @@ Cleaner alternatives I can see, and I'd welcome your view:
 - or keep a small privileged app, extended to also reapply the value when
   audioserver restarts.
 
+## Mod battery level (separate change, ready)
+
+Also broken on lineage-22.2: Android never gets the mod battery level
+(`BatteryService: getModBatteryProperties fail!`, `mod_level=-1`).
+`motorola.hardware.health@1.0-service` crashes with a null pointer
+dereference in `MotHealth::getModBatteryProperties()` whenever a battery mod
+is attached:
+
+```
+F DEBUG   : Cmdline: /vendor/bin/hw/motorola.hardware.health@1.0-service
+F DEBUG   : Cause: null pointer dereference
+F DEBUG   :   #00 pc 0000000000002b98  /vendor/bin/hw/motorola.hardware.health@1.0-service
+              (motorola::hardware::health::V1_0::implementation::MotHealth::getModBatteryProperties(...)+1184)
+```
+
+Disassembly shows the blob calls
+`android.hardware.health@2.0::IHealth::getService()` without a null check and
+then vtable slot `0x98` of `BpHwHealth`, i.e. `getCapacity()`, to read the
+main battery level. Everything about the mod itself comes from
+`/sys/class/power_supply/gb_battery`. Only the AIDL health HAL is registered
+now, so `getService()` returns nullptr.
+
+Fix: `libmothealth_shim`, which interposes `IHealth::getService()` and returns
+an in-process `IHealth` whose `getCapacity()` reads
+`/sys/class/power_supply/battery/capacity` (all other methods return
+`NOT_SUPPORTED`), added to the blob with
+`blob_fixup().add_needed('libmothealth_shim.so')`, next to the existing
+`libbase_shim.so`.
+→ [`beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch`](beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch)
+
+Validated on device with the same source built out of tree (NDK, platform
+headers, linked against the device libraries) and the blob patched with
+`patchelf --add-needed`: no more crashes, no more
+`getModBatteryProperties fail!`, and ModService reports `modLevel = 49` right
+after boot. The in-tree `Android.bp` itself has not been built in a full tree
+yet.
+
 ## What I'm proposing
 
 1. Merge patch 1 (`mixer_paths.xml`): small, self-contained, validated.
 2. Agree on where piece 2 should live (vendor daemon as drafted, or the HAL),
    and I will turn it into a proper Gerrit change.
 3. Same for piece 3 (bundled privileged app vs framework/dock-state fix).
+4. Review the health shim change (patch 0002), which is independent from the
+   audio pieces.
 
 The same approach probably applies to nash/messi, which share
 `msm8998-common` and the mod paths, but I could only test on beckham.

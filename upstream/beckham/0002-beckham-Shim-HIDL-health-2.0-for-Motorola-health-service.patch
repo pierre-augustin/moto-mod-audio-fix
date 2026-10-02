@@ -1,0 +1,195 @@
+From f3085197aa1359e9f6543ec2fa0761f50b55bc9d Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Fri, 2 Oct 2026 16:10:28 +0200
+Subject: [PATCH] beckham: Shim HIDL health 2.0 for Motorola health service
+
+motorola.hardware.health@1.0-service calls
+android.hardware.health@2.0::IHealth::getService() without a null check,
+then IHealth::getCapacity(), in MotHealth::getModBatteryProperties(). Only
+the AIDL health HAL is registered now, so getService() returns nullptr and
+the service crashes whenever a battery mod (e.g. JBL SoundBoost) is
+attached. BatteryService then logs "getModBatteryProperties fail!" and
+reports mod_level=-1, so the mod battery level is never shown.
+
+Add libmothealth_shim, which interposes IHealth::getService() and returns
+an in-process IHealth whose getCapacity() reads the main battery capacity
+from sysfs (every other method returns NOT_SUPPORTED), and add it to the
+blob with blob_fixup().
+
+Test: JBL SoundBoost attached, no more crashes of the Motorola health
+service, BatteryService no longer fails and ModService reports the mod
+level (modLevel = 49).
+
+Change-Id: I8ec35af4574cc67cda9f1ee1671ba6df0e909da9
+---
+ device.mk                   |   1 +
+ extract-files.py            |   1 +
+ health-shim/Android.bp      |  16 ++++++
+ health-shim/health_shim.cpp | 108 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 126 insertions(+)
+ create mode 100644 health-shim/Android.bp
+ create mode 100644 health-shim/health_shim.cpp
+
+diff --git a/device.mk b/device.mk
+index 600fa53..bf824a9 100644
+--- a/device.mk
++++ b/device.mk
+@@ -74,6 +74,7 @@ PRODUCT_COPY_FILES += \
+ 
+ # Motorola Health
+ PRODUCT_PACKAGES += \
++    libmothealth_shim \
+     motorola.hardware.health@1.0.vendor
+ 
+ # NFC
+diff --git a/extract-files.py b/extract-files.py
+index e5c4f4c..65914ea 100755
+--- a/extract-files.py
++++ b/extract-files.py
+@@ -49,6 +49,7 @@ blob_fixups: blob_fixups_user_type = {
+         .add_needed('libmemset_shim.so'),
+     'vendor/bin/hw/motorola.hardware.health@1.0-service': blob_fixup()
+         .add_needed('libbase_shim.so')
++        .add_needed('libmothealth_shim.so')
+         .replace_needed('libhidlbase.so', 'libhidlbase-v32.so')
+         .replace_needed('libutils.so', 'libutils-v32.so'),
+     'vendor/etc/init/android.hardware.biometrics.fingerprint@2.1-service-beckham.rc': blob_fixup()
+diff --git a/health-shim/Android.bp b/health-shim/Android.bp
+new file mode 100644
+index 0000000..7aaaf41
+--- /dev/null
++++ b/health-shim/Android.bp
+@@ -0,0 +1,16 @@
++//
++// SPDX-FileCopyrightText: The LineageOS Project
++// SPDX-License-Identifier: Apache-2.0
++//
++
++cc_library_shared {
++    name: "libmothealth_shim",
++    vendor: true,
++    srcs: ["health_shim.cpp"],
++    shared_libs: [
++        "android.hardware.health@2.0",
++        "libhidlbase",
++        "liblog",
++        "libutils",
++    ],
++}
+diff --git a/health-shim/health_shim.cpp b/health-shim/health_shim.cpp
+new file mode 100644
+index 0000000..9b19418
+--- /dev/null
++++ b/health-shim/health_shim.cpp
+@@ -0,0 +1,108 @@
++/*
++ * libmothealth_shim: minimal android.hardware.health@2.0::IHealth for
++ * motorola.hardware.health@1.0-service.
++ *
++ * The Motorola blob calls IHealth::getService() (HIDL health 2.0) without a
++ * null check and then IHealth::getCapacity() while reading the mod battery
++ * (MotHealth::getModBatteryProperties). LineageOS now ships the AIDL health
++ * HAL only, so getService() returns nullptr and the blob crashes whenever a
++ * battery mod (e.g. JBL SoundBoost) is attached, leaving mod_level at -1.
++ *
++ * This shim interposes IHealth::getService() and returns an in-process
++ * object whose getCapacity() reads the main battery capacity from sysfs.
++ * Every other method reports NOT_SUPPORTED.
++ */
++#define LOG_TAG "mothealth_shim"
++
++#include <android/hardware/health/2.0/IHealth.h>
++#include <log/log.h>
++
++#include <fstream>
++#include <string>
++
++using ::android::sp;
++using ::android::hardware::hidl_handle;
++using ::android::hardware::hidl_string;
++using ::android::hardware::hidl_vec;
++using ::android::hardware::Return;
++using ::android::hardware::Void;
++using ::android::hardware::health::V2_0::DiskStats;
++using ::android::hardware::health::V2_0::HealthInfo;
++using ::android::hardware::health::V2_0::IHealth;
++using ::android::hardware::health::V2_0::IHealthInfoCallback;
++using ::android::hardware::health::V2_0::Result;
++using ::android::hardware::health::V2_0::StorageInfo;
++using ::android::hardware::health::V1_0::BatteryStatus;
++
++namespace {
++
++constexpr char kCapacityPath[] = "/sys/class/power_supply/battery/capacity";
++
++class HealthShim : public IHealth {
++  public:
++    Return<Result> registerCallback(const sp<IHealthInfoCallback>&) override {
++        return Result::NOT_SUPPORTED;
++    }
++    Return<Result> unregisterCallback(const sp<IHealthInfoCallback>&) override {
++        return Result::NOT_SUPPORTED;
++    }
++    Return<Result> update() override { return Result::NOT_SUPPORTED; }
++
++    Return<void> getChargeCounter(getChargeCounter_cb cb) override {
++        cb(Result::NOT_SUPPORTED, 0);
++        return Void();
++    }
++    Return<void> getCurrentNow(getCurrentNow_cb cb) override {
++        cb(Result::NOT_SUPPORTED, 0);
++        return Void();
++    }
++    Return<void> getCurrentAverage(getCurrentAverage_cb cb) override {
++        cb(Result::NOT_SUPPORTED, 0);
++        return Void();
++    }
++
++    Return<void> getCapacity(getCapacity_cb cb) override {
++        std::ifstream f(kCapacityPath);
++        int32_t capacity;
++        if (f >> capacity) {
++            cb(Result::SUCCESS, capacity);
++        } else {
++            ALOGE("Failed to read %s", kCapacityPath);
++            cb(Result::UNKNOWN, 0);
++        }
++        return Void();
++    }
++
++    Return<void> getEnergyCounter(getEnergyCounter_cb cb) override {
++        cb(Result::NOT_SUPPORTED, 0);
++        return Void();
++    }
++    Return<void> getChargeStatus(getChargeStatus_cb cb) override {
++        cb(Result::NOT_SUPPORTED, BatteryStatus::UNKNOWN);
++        return Void();
++    }
++    Return<void> getStorageInfo(getStorageInfo_cb cb) override {
++        cb(Result::NOT_SUPPORTED, hidl_vec<StorageInfo>());
++        return Void();
++    }
++    Return<void> getDiskStats(getDiskStats_cb cb) override {
++        cb(Result::NOT_SUPPORTED, hidl_vec<DiskStats>());
++        return Void();
++    }
++    Return<void> getHealthInfo(getHealthInfo_cb cb) override {
++        cb(Result::NOT_SUPPORTED, HealthInfo());
++        return Void();
++    }
++};
++
++}  // namespace
++
++namespace android::hardware::health::V2_0 {
++
++// Interposes the definition from android.hardware.health@2.0.so.
++sp<IHealth> IHealth::getService(const std::string& /* serviceName */, bool /* getStub */) {
++    static sp<IHealth> instance = new HealthShim();
++    return instance;
++}
++
++}  // namespace android::hardware::health::V2_0
+-- 
+2.53.0
+

@@ -2,6 +2,8 @@
 
 Makes audio Moto Mods (JBL SoundBoost and similar) actually play sound on
 LineageOS 22.2, where the mod is detected but stays silent.
+It also makes the mod battery level visible again (see
+[Mod battery level](#mod-battery-level)).
 
 **Validated on 2026-10-02** on a Moto Z3 Play `beckham`, LineageOS 22.2
 userdebug, with a JBL SoundBoost: audio plays on the mod after a cold reboot
@@ -38,6 +40,34 @@ Useful details:
   `audio_policy_configuration.xml`. It only creates a duplicate device with no
   hardware path behind it (reverted on the phone).
 
+## Mod battery level
+
+Separate issue, same mod: Android never shows the mod battery level
+(`mod_level=-1`, ModService logs "invalid battery level. The battery is
+detached?").
+
+- `motorola.hardware.health@1.0-service` (Motorola blob) reads the mod battery
+  from `/sys/class/power_supply/gb_battery`, but also calls
+  `android.hardware.health@2.0::IHealth::getService()` **without a null
+  check**, then `IHealth::getCapacity()` to get the main battery level.
+- LineageOS 22.2 only ships the AIDL health HAL, so `getService()` returns
+  nullptr and the blob crashes every time it is asked for the mod battery
+  (`BatteryService: getModBatteryProperties fail!`).
+- Fix: `health-shim/libmothealth_shim.so` interposes `IHealth::getService()`
+  and returns a minimal in-process `IHealth` whose `getCapacity()` reads
+  `/sys/class/power_supply/battery/capacity`. It is added to the blob's
+  `DT_NEEDED` with `patchelf --add-needed`, the same way LineageOS already adds
+  `libbase_shim.so` to this blob.
+
+Note: the kernel `gb_battery` driver asks the mod firmware for the percentage
+on every read, so a mod left unused for months really reports 0 % until it is
+charged.
+
+`health-shim/build.sh` builds the shim with the NDK against the platform
+headers (fetched from the AOSP VNDK snapshots) and the phone's own libraries,
+and produces a patched copy of the blob pulled from the phone. No Motorola
+binary is stored in this repo.
+
 ## ⚠️ Warnings
 
 - **Never write data to PCM 65** (`tinyplay ... -d 65`): it is a hostless link
@@ -59,6 +89,7 @@ export JAVA_HOME=~/android-toolchain/jdk-17.0.20.1+1
 export ANDROID_HOME=~/android-toolchain/android-sdk
 gradle assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
 ./native/build.sh             # → native/modlinkd, native/modlink (NDK r27c)
+./health-shim/build.sh        # → health-shim/out/ (needs patchelf and the phone on adb)
 ```
 
 ## Install
@@ -90,6 +121,14 @@ adb shell "chmod 755 /vendor/bin/modlinkd; chmod 644 /vendor/etc/init/modlinkd.r
   chcon u:object_r:vendor_file:s0 /vendor/bin/modlinkd; \
   chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/modlinkd.rc"
 
+# 4. Mod battery level: health shim + patched Motorola health blob
+adb shell cp -p /vendor/bin/hw/motorola.hardware.health@1.0-service /vendor/bin/hw/motorola.hardware.health@1.0-service.orig
+adb push health-shim/out/libmothealth_shim.so /vendor/lib64/
+adb push health-shim/out/motorola.hardware.health@1.0-service /vendor/bin/hw/
+adb shell "chmod 644 /vendor/lib64/libmothealth_shim.so; chmod 755 /vendor/bin/hw/motorola.hardware.health@1.0-service; \
+  chcon u:object_r:vendor_file:s0 /vendor/lib64/libmothealth_shim.so; \
+  chcon u:object_r:hal_health_default_exec:s0 /vendor/bin/hw/motorola.hardware.health@1.0-service"
+
 adb reboot
 ```
 
@@ -108,6 +147,9 @@ modlinkd: mod output devices=0x1 -> link opened
 ```
 and in the kernel log (`dmesg`): `gb_i2s_mgmt_activate_port: opcode: 0x0A, ret: 0`.
 
+Mod battery level: `adb logcat | grep -E "getModBatteryProperties|modLevel"`
+should show `modLevel = <percent>` and no `getModBatteryProperties fail!`.
+
 `native/modlink` is the manual debugging tool that opens the link once
 (`/data/local/tmp/modlink 65 1 48000`, Ctrl-C to close it).
 
@@ -119,13 +161,16 @@ adb remount
 adb shell rm -rf /system/priv-app/ModAudioFix /system/etc/permissions/privapp-permissions-modaudiofix.xml
 adb shell rm /vendor/bin/modlinkd /vendor/etc/init/modlinkd.rc
 adb shell cp -p /vendor/etc/mixer_paths.xml.orig /vendor/etc/mixer_paths.xml
+adb shell rm /vendor/lib64/libmothealth_shim.so
+adb shell mv /vendor/bin/hw/motorola.hardware.health@1.0-service.orig /vendor/bin/hw/motorola.hardware.health@1.0-service
 adb reboot
 ```
 
 ## Upstream integration
 
 See [`upstream/`](upstream) for the proposal to the LineageOS beckham
-maintainers (ready `mixer_paths.xml` patch, `modlinkd` vendor module draft).
+maintainers (ready `mixer_paths.xml` patch, `modlinkd` vendor module draft,
+health shim change).
 
 
 The proper version of these three fixes, on the device tree / HAL side:

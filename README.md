@@ -198,8 +198,8 @@ adb reboot
 ## Upstream integration
 
 See [`upstream/`](upstream) for the proposal to the LineageOS beckham
-maintainers (ready `mixer_paths.xml` patch, `modlinkd` vendor module draft,
-health shim change).
+maintainers (`mixer_paths.xml` patch and health shim changes submitted on
+Gerrit, `modlinkd` vendor module draft).
 
 
 The proper version of these three fixes, on the device tree / HAL side:

@@ -125,7 +125,7 @@ Cleaner alternatives I can see, and I'd welcome your view:
   value is reset while the dock device is connected (user switches to secondary
   profiles reset it too, through `readDockAudioSettings()`).
 
-## Mod battery level (separate change, ready)
+## Mod battery level (separate changes, submitted)
 
 Also broken on lineage-22.2: Android never gets the mod battery level
 (`BatteryService: getModBatteryProperties fail!`, `mod_level=-1`).
@@ -152,8 +152,15 @@ an in-process `IHealth` whose `getCapacity()` reads
 `/sys/class/power_supply/battery/capacity` (all other methods return
 `NOT_SUPPORTED`), added to the blob with
 `blob_fixup().add_needed('libmothealth_shim.so')`, next to the existing
-`libbase_shim.so`.
-→ [`beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch`](beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch)
+`libbase_shim.so`. Following review, it is split in two changes (Gerrit topic
+`mothealth-shim`):
+- the shim module lives in msm8998-common so nash/payton can use it too:
+  [505961](https://review.lineageos.org/c/LineageOS/android_device_motorola_msm8998-common/+/505961)
+  → [`msm8998-common/0001-msm8998-common-Add-HIDL-health-2.0-shim-for-Motorola-health-service.patch`](msm8998-common/0001-msm8998-common-Add-HIDL-health-2.0-shim-for-Motorola-health-service.patch)
+- beckham only adds it to the blob in `extract-files.py` (no `PRODUCT_PACKAGES`
+  entry: `add_needed` pulls it in):
+  [505951](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505951)
+  → [`beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch`](beckham/0002-beckham-Shim-HIDL-health-2.0-for-Motorola-health-service.patch)
 
 Validated on device with the same source built out of tree (NDK, platform
 headers, linked against the device libraries) and the blob patched with
@@ -164,12 +171,13 @@ yet.
 
 ## What I'm proposing
 
-1. Merge patch 1 (`mixer_paths.xml`): small, self-contained, validated.
+1. Merge patch 1 (`mixer_paths.xml`): small, self-contained, validated
+   ([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943)).
 2. Agree on where piece 2 should live (vendor daemon as drafted, or the HAL),
    and I will turn it into a proper Gerrit change.
 3. Same for piece 3 (bundled privileged app vs framework/dock-state fix).
-4. Review the health shim change (patch 0002), which is independent from the
-   audio pieces.
+4. Review the health shim changes (topic `mothealth-shim`, 505961 + 505951),
+   which are independent from the audio pieces.
 
 The same approach probably applies to nash/messi, which share
 `msm8998-common` and the mod paths, but I could only test on beckham.

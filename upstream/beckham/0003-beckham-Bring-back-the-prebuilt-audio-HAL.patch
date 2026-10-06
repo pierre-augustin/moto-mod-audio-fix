@@ -1,0 +1,94 @@
+From b79b6acccea3ebb0e64944b06639b0e612c38b16 Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Sat, 3 Oct 2026 08:00:26 +0200
+Subject: [PATCH] beckham: Bring back the prebuilt audio HAL
+
+Load beckham's stock audio HAL next to the CAF one, the same way nash does:
+ship it renamed as audio.primary.sdm660-moto.so, with the Motorola
+libtinyalsa and libaudioroute renamed to -moto so they don't clash with the
+CAF ones, and select it with ro.hardware.audio.primary. Unlike nash, the
+Motorola libaudioroute is needed: the HAL uses audio_route_init_v2() and
+audio_route_free_v2(), which AOSP's libaudioroute does not have.
+
+The stock HAL has native Moto Mods audio support (audio_mods): it routes
+media to mod-speaker, opens the MODS_MI2S link itself, uses the mod ACDB
+and plays in stereo, which the CAF HAL cannot do.
+
+Fixups are the ones the blobs had before the HAL was dropped (libcutils ->
+libprocessgroup, VNDK 32 libutils).
+
+Test (blobs from lineage-20 with the same fixups, renamed on device): no
+crash, media plays on a JBL SoundBoost in stereo, calls (earpiece, mic),
+speaker without the mod, mod detach/reattach all work. Speakerphone during
+a call stays on the phone speaker.
+
+Change-Id: I79ef5486b7884dc8c081a4873c7a4291ea9c29d4
+---
+ extract-files.py      | 15 +++++++++++++++
+ proprietary-files.txt |  9 +++++++++
+ vendor.prop           |  1 +
+ 3 files changed, 25 insertions(+)
+
+diff --git a/extract-files.py b/extract-files.py
+index 65914ea..aef8632 100755
+--- a/extract-files.py
++++ b/extract-files.py
+@@ -54,6 +54,21 @@ blob_fixups: blob_fixups_user_type = {
+         .replace_needed('libutils.so', 'libutils-v32.so'),
+     'vendor/etc/init/android.hardware.biometrics.fingerprint@2.1-service-beckham.rc': blob_fixup()
+         .regex_replace('system input', 'system uhid input'),
++    'vendor/lib/hw/audio.primary.sdm660-moto.so': blob_fixup()
++        .replace_needed('libaudioroute.so', 'libaudioroute-moto.so')
++        .replace_needed('libcutils.so', 'libprocessgroup.so')
++        .replace_needed('libtinyalsa.so', 'libtinyalsa-moto.so')
++        .replace_needed('libutils.so', 'libutils-v32.so')
++        .fix_soname(),
++    'vendor/lib/libaudioroute-moto.so': blob_fixup()
++        .replace_needed('libtinyalsa.so', 'libtinyalsa-moto.so')
++        .replace_needed('libutils.so', 'libutils-v32.so')
++        .fix_soname(),
++    (
++        'vendor/lib/libmotaudioutils.so',
++        'vendor/lib/libtinycompress_vendor.so'
++    ): blob_fixup()
++        .replace_needed('libutils.so', 'libutils-v32.so'),
+     (
+         'vendor/lib/com.motorola.mod@1.0_vendor.so',
+         'vendor/lib/libmodmanager.so',
+diff --git a/proprietary-files.txt b/proprietary-files.txt
+index ebca239..e81fee9 100644
+--- a/proprietary-files.txt
++++ b/proprietary-files.txt
+@@ -2,8 +2,17 @@
+ ## are from beckham_retail (PPWS29.131-27-1-27).
+ 
+ # Current blobs with ELF checks disabled:
++# audio.primary.sdm660-moto.so, libaudioroute-moto.so, libtinyalsa-moto.so are parts of a prebuilt stack, with unresolvable dependencies on GNU makefile targets
+ # libmmcamera2_cpp_module, libmmcamera2_iface_modules, libmmcamera2_imglib_modules, libmmcamera2_is, libmmcamera2_isp_modules, libmmcamera2_mct, libmmcamera2_q3a_core, libmmcamera2_sensor_modules, libmmcamera2_stats_algorithm, libmmcamera2_stats_lib, libmmcamera2_stats_modules, libmmcamera_faceproc, libmmcamera_hdr_gb_lib, libmmcamera_interface, libmmcamera_pdaf, libmmcamera_pdafcamif, libmmcamera_vstab_module are unable to resolve the following symbol: __aeabi_uldivmod (32-bit)
+ 
++# Audio (Prebuilt Audio HAL)
++vendor/lib/hw/audio.primary.sdm660.so:vendor/lib/hw/audio.primary.sdm660-moto.so;DISABLE_CHECKELF
++vendor/lib/libaudioroute.so:vendor/lib/libaudioroute-moto.so;DISABLE_CHECKELF
++vendor/lib/libmotaudioutils.so
++vendor/lib/libtinyalsa.so:vendor/lib/libtinyalsa-moto.so;DISABLE_CHECKELF
++vendor/lib/libtinycompress_vendor.so
++vendor/lib/libunshorten.so
++
+ # Audio - ACDB
+ system/etc/acdbdata/Bluetooth_cal.acdb:vendor/etc/acdbdata/Bluetooth_cal.acdb
+ system/etc/acdbdata/General_cal.acdb:vendor/etc/acdbdata/General_cal.acdb
+diff --git a/vendor.prop b/vendor.prop
+index e532675..83137a3 100644
+--- a/vendor.prop
++++ b/vendor.prop
+@@ -12,6 +12,7 @@ persist.vendor.audio.fluence.speaker=true
+ persist.vendor.audio.fluence.voicecall=true
+ persist.vendor.audio.fluence.voicecomm=true
+ persist.vendor.audio.fluence.voicerec=false
++ro.hardware.audio.primary=sdm660-moto
+ ro.vendor.audio.sdk.fluencetype=none
+ vendor.audio.feature.fm.enable=true
+ vendor.audio.feature.incall_music.enable=false
+-- 
+2.53.0
+

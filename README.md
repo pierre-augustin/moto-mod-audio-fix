@@ -218,6 +218,20 @@ adb shell "[ -f /vendor/bin/hw/motorola.hardware.health@1.0-service.orig ] && mv
 adb reboot
 ```
 
+## Shared phone (one profile per child)
+
+`install.sh` also sets two things for a phone shared through secondary
+profiles, so the children can use it after a reboot without the owner's
+credential:
+- `settings put global allow_user_switching_when_system_user_locked 1`: Android
+  15 otherwise blocks switching users until the system user has been unlocked.
+- `bmgr --user 0 activate false` (creates `/data/backup/backup-suppress`): with
+  the setting above, unlocking a secondary user while the system user is still
+  locked crashes system_server (`UserBackupManagerService` →
+  `UserBackupPreferences` reads user 0's credential-encrypted storage) and the
+  phone reboots. This turns the Android backup service off for every user, so
+  Google backup no longer runs on that phone.
+
 ## Upstream integration
 
 See [`upstream/`](upstream): the health shim is merged; for audio, the beckham

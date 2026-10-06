@@ -1,0 +1,32 @@
+From 7fa7a3a9c57522a729abe91da07f5f03f3d33a88 Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Tue, 6 Oct 2026 23:21:49 +0200
+Subject: [PATCH] beckham: overlay: Route dock media audio to the analog dock
+
+Moto Mods speakers (e.g. JBL SoundBoost) are connected as an analog dock
+by the mod service. Enable config_dockAudioUseAnalogDock so AudioService
+sets FOR_DOCK to FORCE_ANALOG_DOCK and media plays on the mod, as it did
+up to Android 13.
+
+Depends on the frameworks_base change adding config_dockAudioUseAnalogDock.
+
+Change-Id: I3a8fe3206250fa12f18fe5f2e011618c98e089af
+---
+ overlay/frameworks/base/core/res/res/values/config.xml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/overlay/frameworks/base/core/res/res/values/config.xml b/overlay/frameworks/base/core/res/res/values/config.xml
+index 7a804f2..86c3091 100644
+--- a/overlay/frameworks/base/core/res/res/values/config.xml
++++ b/overlay/frameworks/base/core/res/res/values/config.xml
+@@ -36,4 +36,7 @@
+     <!-- Control whether the always on display mode is enabled by default. This value will be used
+          during initialization when the setting is still null. -->
+     <bool name="config_dozeAlwaysOnEnabled">false</bool>
++
++    <!-- Moto Mods speakers connect as an analog dock: route dock media audio to it. -->
++    <bool name="config_dockAudioUseAnalogDock">true</bool>
+ </resources>
+-- 
+2.53.0
+

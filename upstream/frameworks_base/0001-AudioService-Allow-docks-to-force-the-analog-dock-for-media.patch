@@ -1,0 +1,91 @@
+From c23fc0e0c21ddff32a91f7cd05bb8bc5b98b4edb Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Tue, 6 Oct 2026 23:20:07 +0200
+Subject: [PATCH] AudioService: Allow docks to force the analog dock for media
+
+Since Android 14, readDockAudioSettings() and onAudioServerDied() set
+FOR_DOCK to FORCE_DIGITAL_DOCK when DOCK_AUDIO_MEDIA_ENABLED is set, where
+Android 13 and earlier used FORCE_ANALOG_DOCK. The audio policy only
+selects AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET for media with
+FORCE_ANALOG_DOCK, so analog dock audio accessories such as Moto Mods
+speakers (connected as an analog dock by the Moto mod service) no longer
+get media playback.
+
+Add config_dockAudioUseAnalogDock (default false) to restore
+FORCE_ANALOG_DOCK on devices that need it.
+
+Not built yet. Effect checked on beckham with the stock audio HAL and a
+JBL SoundBoost mod, setting FOR_DOCK by hand: media plays on the mod with
+FORCE_ANALOG_DOCK, and on the phone speaker with FORCE_DIGITAL_DOCK.
+
+Change-Id: I2699b0c7acc952df69f3184228caf2dc5574c9ce
+---
+ core/res/res/values/config.xml                         |  5 +++++
+ core/res/res/values/symbols.xml                        |  1 +
+ .../java/com/android/server/audio/AudioService.java    | 10 ++++++++--
+ 3 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 18fd4447..97451735 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -3471,6 +3471,11 @@
+          stream or global volumes. -->
+     <bool name="config_useFixedVolume">false</bool>
+ 
++    <!-- Whether media audio on a dock (Settings.Global.DOCK_AUDIO_MEDIA_ENABLED) should force the
++         analog dock (AUDIO_POLICY_FORCE_ANALOG_DOCK) instead of the digital dock, as Android 13
++         and earlier did. Needed by analog dock audio accessories such as Moto Mods speakers. -->
++    <bool name="config_dockAudioUseAnalogDock">false</bool>
++
+     <!-- The list of IMEs which should be disabled until used.
+          This function suppresses update notifications for these pre-installed apps.
+          We need to set this configuration carefully that they should not have functionarities
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index f4703232..08bf81e2 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -362,6 +362,7 @@
+   <java-symbol type="bool" name="config_restartRadioAfterProvisioning" />
+   <java-symbol type="bool" name="config_speed_up_audio_on_mt_calls" />
+   <java-symbol type="bool" name="config_useFixedVolume" />
++  <java-symbol type="bool" name="config_dockAudioUseAnalogDock" />
+   <java-symbol type="bool" name="config_isMainUserPermanentAdmin"/>
+   <java-symbol type="bool" name="config_canSwitchToHeadlessSystemUser"/>
+   <java-symbol type="bool" name="config_enableMultiUserUI"/>
+diff --git a/services/core/java/com/android/server/audio/AudioService.java b/services/core/java/com/android/server/audio/AudioService.java
+index ac137248..033b7009 100644
+--- a/services/core/java/com/android/server/audio/AudioService.java
++++ b/services/core/java/com/android/server/audio/AudioService.java
+@@ -1992,7 +1992,7 @@ public class AudioService extends IAudioService.Stub
+ 
+         synchronized (mSettingsLock) {
+             final int forDock = mDockAudioMediaEnabled ?
+-                    AudioSystem.FORCE_DIGITAL_DOCK : AudioSystem.FORCE_NONE;
++                    getDockAudioMediaForceConfig() : AudioSystem.FORCE_NONE;
+             mDeviceBroker.setForceUse_Async(AudioSystem.FOR_DOCK, forDock, "onAudioServerDied");
+             sendEncodedSurroundMode(mContentResolver, "onAudioServerDied");
+             sendEnabledSurroundFormats(mContentResolver, true);
+@@ -2728,12 +2728,18 @@ public class AudioService extends IAudioService.Stub
+                 SENDMSG_QUEUE,
+                 AudioSystem.FOR_DOCK,
+                 mDockAudioMediaEnabled ?
+-                        AudioSystem.FORCE_DIGITAL_DOCK : AudioSystem.FORCE_NONE,
++                        getDockAudioMediaForceConfig() : AudioSystem.FORCE_NONE,
+                 new String("readDockAudioSettings"),
+                 0);
+ 
+     }
+ 
++    private int getDockAudioMediaForceConfig() {
++        return mContext.getResources().getBoolean(
++                com.android.internal.R.bool.config_dockAudioUseAnalogDock)
++                ? AudioSystem.FORCE_ANALOG_DOCK : AudioSystem.FORCE_DIGITAL_DOCK;
++    }
++
+ 
+     private void updateMasterMono(ContentResolver cr)
+     {
+-- 
+2.53.0
+

@@ -139,6 +139,16 @@ sh_adb "chmod 644 /vendor/lib64/libmothealth_shim.so && chmod 755 $BLOB && \
     chcon u:object_r:hal_health_default_exec:s0 $BLOB"
 fi
 
+step "Multi-user: allow switching users while the owner profile is locked"
+# Lets each child unlock their own profile after a reboot without the owner's
+# credential (Android 15 blocks user switching until the system user unlocks).
+sh_adb "settings put global allow_user_switching_when_system_user_locked 1"
+# The backup service crashes system_server when a secondary user unlocks while
+# the system user is still locked (UserBackupPreferences reads user 0's CE
+# storage). Deactivating it for the system user creates /data/backup/backup-suppress,
+# which turns the backup service off for every user.
+sh_adb "bmgr --user 0 activate false" >/dev/null
+
 if [ "$REBOOT" = 0 ]; then
     step "Done. Reboot the phone to apply."
     exit 0
@@ -158,6 +168,10 @@ ok=1
 check() {
     if [ "$2" = "$3" ]; then echo "  OK    $1"; else echo "  FAIL  $1 (got '$2', expected '$3')"; ok=0; fi
 }
+check "backup service off (needed for the above)" \
+    "$(sh_adb '[ -f /data/backup/backup-suppress ] && echo yes')" yes
+check "user switching while owner locked" \
+    "$(sh_adb settings get global allow_user_switching_when_system_user_locked)" 1
 check "ModAudioFix permission" \
     "$(sh_adb dumpsys package dev.paugustin.modaudiofix | grep -c 'MODIFY_AUDIO_ROUTING: granted=true')" 1
 if [ "$AUDIO" = stock ]; then

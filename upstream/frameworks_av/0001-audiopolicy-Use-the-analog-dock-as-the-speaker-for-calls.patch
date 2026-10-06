@@ -1,0 +1,53 @@
+From 53609f87c9971e36369e94fdd6c87e29b7da7a06 Mon Sep 17 00:00:00 2001
+From: pierre-augustin <pierre.augustin@gmail.com>
+Date: Tue, 6 Oct 2026 23:20:57 +0200
+Subject: [PATCH] audiopolicy: Use the analog dock as the speaker for calls
+
+Speakerphone is selected by setting the device speaker as preferred
+device for the phone strategy, which returns it before any routing rule.
+On devices whose loudspeaker accessories connect as an analog dock (e.g.
+Moto Mods speakers), calls then stay on the phone speaker even while media
+plays on the dock, whereas Motorola's stock audio policy routed
+speakerphone calls to the dock (the stock audio HAL then uses
+mod-voice-speaker and the mod-aware microphone path).
+
+When the speaker is preferred for the phone/DTMF strategies, FOR_DOCK is
+FORCE_ANALOG_DOCK and an analog dock is connected, return the dock
+instead. FORCE_ANALOG_DOCK is only set when the device opts in (see
+config_dockAudioUseAnalogDock), so other devices are not affected.
+
+Not built or tested yet. Expected behavior taken from a Moto Z2 Play on
+stock Oreo (same audio_mods HAL), where a speakerphone call goes to output
+devices 0x800 and the HAL picks mod-voice-speaker.
+
+Change-Id: I804945e588d4827443aa5b38e9bce9c23ca753a3
+---
+ services/audiopolicy/enginedefault/src/Engine.cpp | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/services/audiopolicy/enginedefault/src/Engine.cpp b/services/audiopolicy/enginedefault/src/Engine.cpp
+index b927cc1..647f43f 100644
+--- a/services/audiopolicy/enginedefault/src/Engine.cpp
++++ b/services/audiopolicy/enginedefault/src/Engine.cpp
+@@ -830,6 +830,18 @@ DeviceVector Engine::getDevicesForProductStrategy(product_strategy_t strategy) c
+     DeviceVector preferredAvailableDevVec =
+             getPreferredAvailableDevicesForProductStrategy(availableOutputDevices, strategy);
+     if (!preferredAvailableDevVec.isEmpty()) {
++        // When the device speaker is selected for a call and an analog dock audio accessory
++        // (e.g. a Moto Mods speaker) is connected with media routed to it (FORCE_ANALOG_DOCK),
++        // use the dock as the speaker, like Motorola's stock audio policy did.
++        if ((legacyStrategy == STRATEGY_PHONE || legacyStrategy == STRATEGY_DTMF)
++                && getForceUse(AUDIO_POLICY_FORCE_FOR_DOCK) == AUDIO_POLICY_FORCE_ANALOG_DOCK
++                && preferredAvailableDevVec.containsDeviceWithType(AUDIO_DEVICE_OUT_SPEAKER)) {
++            DeviceVector analogDock =
++                    availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET);
++            if (!analogDock.isEmpty()) {
++                return analogDock;
++            }
++        }
+         return preferredAvailableDevVec;
+     }
+ 
+-- 
+2.53.0
+

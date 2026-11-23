@@ -1,0 +1,73 @@
+#!/sbin/sh
+# Installs ModAudioFix into /system (priv-app) from recovery, plus an addon.d
+# script so LineageOS updates keep it. Mount logic adapted from MindTheGapps.
+
+OUTFD="/proc/self/fd/$2"
+ZIP=$3
+ui_print() { echo "ui_print $1" > "$OUTFD"; echo "ui_print" > "$OUTFD"; }
+
+get_block_for_mount_point() {
+  grep -v "^#" /etc/recovery.fstab | grep "[[:blank:]]$1[[:blank:]]" | tail -n1 | tr -s '[:blank:]' ' ' | cut -d' ' -f1
+}
+find_block() {
+  local name="$1" e dev
+  e=$(get_block_for_mount_point "/$name")
+  [ -z "$e" ] && [ "$name" = system ] && e=$(get_block_for_mount_point "/")
+  [ -z "$e" ] && [ "$name" = system ] && e=$(get_block_for_mount_point "/system_root")
+  if [ "$DYNAMIC_PARTITIONS" = true ]; then
+    if [ -n "$e" ]; then dev="$BLK_PATH/$e$SLOT_SUFFIX"; else dev="$BLK_PATH/$name$SLOT_SUFFIX"; fi
+  else
+    if [ -n "$e" ]; then dev="$e$SLOT_SUFFIX"; else dev="$BLK_PATH/$name$SLOT_SUFFIX"; fi
+  fi
+  [ -b "$dev" ] && echo "$dev"
+}
+fail() { ui_print "ERROR: $1"; umount -l /mnt/system 2>/dev/null; umount -l /mnt/vendor_ro 2>/dev/null; exit 1; }
+
+ui_print "*************************"
+ui_print "ModAudioFix installer"
+ui_print "*************************"
+
+TMP=/tmp/modaudiofix; rm -rf $TMP; mkdir -p $TMP; cd $TMP || fail "no /tmp"
+unzip -o "$ZIP" 'system/*' >/dev/null || fail "unzip"
+
+DYNAMIC_PARTITIONS=$(getprop ro.boot.dynamic_partitions)
+if [ "$DYNAMIC_PARTITIONS" = true ]; then BLK_PATH=/dev/block/mapper; else BLK_PATH=/dev/block/bootdevice/by-name; fi
+case "$(getprop ro.boot.slot_suffix)" in _a) SLOT_SUFFIX=_a;; _b) SLOT_SUFFIX=_b;; *) SLOT_SUFFIX=;; esac
+ui_print "Slot: ${SLOT_SUFFIX:-none}"
+
+# Read-only check: is the stock audio HAL shipped by this build?
+VB=$(find_block vendor)
+if [ -n "$VB" ]; then
+  mkdir -p /mnt/vendor_ro
+  if mount -o ro "$VB" /mnt/vendor_ro 2>/dev/null; then
+    if [ -f /mnt/vendor_ro/lib/hw/audio.primary.sdm660-moto.so ]; then ui_print "Stock audio HAL: present"; else ui_print "Stock audio HAL: MISSING"; fi
+    grep -m1 "ro.hardware.audio.primary" /mnt/vendor_ro/build.prop /mnt/vendor_ro/*.prop 2>/dev/null | sed 's/.*://' | while read l; do ui_print "  $l"; done
+    umount -l /mnt/vendor_ro
+  fi
+fi
+
+umount /system 2>/dev/null; umount /mnt/system 2>/dev/null
+SB=$(find_block system); [ -n "$SB" ] || fail "system block not found"
+[ "$DYNAMIC_PARTITIONS" = true ] && blockdev --setrw "$SB"
+mkdir -p /mnt/system
+mount -o rw "$SB" /mnt/system || fail "cannot mount $SB"
+OUT=/mnt/system/system
+[ -f $OUT/build.prop ] || fail "unexpected system layout"
+
+ui_print "Copying files"
+cd $TMP/system
+for f in priv-app/ModAudioFix/ModAudioFix.apk etc/permissions/privapp-permissions-modaudiofix.xml addon.d/31-modaudiofix.sh; do
+  mkdir -p "$OUT/$(dirname $f)"
+  cp -f "$f" "$OUT/$f" || fail "copy $f"
+  chown root:root "$OUT/$f"; chmod 644 "$OUT/$f"
+  chcon u:object_r:system_file:s0 "$OUT/$f"
+done
+chmod 755 $OUT/priv-app/ModAudioFix $OUT/addon.d/31-modaudiofix.sh
+chcon u:object_r:system_file:s0 $OUT/priv-app/ModAudioFix
+sync
+ls -lZ $OUT/priv-app/ModAudioFix $OUT/etc/permissions/privapp-permissions-modaudiofix.xml $OUT/addon.d/31-modaudiofix.sh 2>&1 | while read l; do ui_print "$l"; done
+
+umount -l /mnt/system
+rm -rf $TMP
+ui_print "Done. Reboot system."
+exit 0

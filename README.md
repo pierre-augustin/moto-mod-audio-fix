@@ -13,15 +13,20 @@ and user (profile) switches.
 
 | Piece | What it does | Where |
 |---|---|---|
-| **Stock audio HAL** | beckham's Motorola audio HAL, run next to the CAF one like nash does. It has native mod support: routes media to `mod-speaker`, opens the mod I2S link, uses the mod calibration, and plays in stereo | `stock-hal/` |
+| **Stock audio HAL** | beckham's Motorola audio HAL, run next to the CAF one like nash does. It has native mod support: routes media to `mod-speaker`, opens the mod I2S link, uses the mod calibration, and plays in stereo. **Merged in LineageOS** ([506063](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506063), official builds from 2026-10-14 on): `install.sh` is only needed for older builds | `stock-hal/` |
 | **ModAudioFix app** | keeps `force_use(FOR_DOCK)` at `ANALOG_DOCK` while the mod is attached, so the audio policy selects the dock device at all | `app/` |
 | **Health shim** | fixes the crash of the Motorola health service, so Android shows the mod battery level. **Merged in LineageOS** (2026-10-02): builds after that ship it, and `install.sh` then skips it | `health-shim/` |
 
-Known limitation: **speakerphone during a call stays on the phone speaker**
-(the HAL does not swap `voice-speaker` to the mod). The stock HAL accepts a
-`mod_outputs=…;mod_inputs=…` parameter that the stock Motorola mod service
-probably set; not investigated yet. Earpiece calls, microphone, and media after
-a call (back on the mod) all work.
+On official builds from 2026-10-14 on, **only the ModAudioFix app is
+needed**. Without USB debugging (for instance when a supervised Family Link
+account is the active profile), install it from recovery: see
+[From recovery](#from-recovery-no-usb-debugging-needed).
+
+Known limitation: **speakerphone during a call stays on the phone speaker**.
+On stock firmware the audio policy routes speakerphone calls to the dock and
+the HAL then uses `mod-voice-speaker`; on Android 15 the policy picks the phone
+speaker. A framework fix is proposed (see [Upstream integration](#upstream-integration)).
+Earpiece calls, microphone, and media after a call (back on the mod) all work.
 
 ## Stock audio HAL
 
@@ -160,6 +165,38 @@ stops with "/vendor is still read-only", reboot the phone once (the first
 A LineageOS update overwrites `/system` and `/vendor`: run `./install.sh` again
 after each update.
 
+### From recovery (no USB debugging needed)
+
+`recovery/build.sh` builds `recovery/out/ModAudioFix-recovery.zip`, which
+installs the app into `/system` from LineageOS recovery and adds an `addon.d`
+script (`/system/addon.d/31-modaudiofix.sh`), so **LineageOS updates keep the
+app** the same way they keep GApps. Use it on official builds that already ship
+the stock audio HAL (2026-10-14 and later).
+
+```bash
+gradle assembleDebug
+./recovery/build.sh
+# Phone: reboot to recovery → Apply update → Apply from ADB
+adb sideload recovery/out/ModAudioFix-recovery.zip
+# "Signature verification failed" is expected (unsigned zip): choose Yes
+```
+
+The installer also reports, read-only, whether the build ships the stock audio
+HAL (`Stock audio HAL: present`).
+
+Alternative without sideload: in recovery, Advanced → Enable ADB gives a root
+`adb shell` even when Android's own USB debugging is blocked. Mount
+`/dev/block/by-name/system_<slot>` read-write (slot from
+`getprop ro.boot.slot_suffix`) and copy the three files with mode 644 (755 for
+the directory and the `addon.d` script), owner root and context `system_file`.
+
+Writing to `/system` from recovery is safe on beckham's official builds:
+dm-verity is disabled there (the GApps `addon.d` relies on it too).
+
+Validated on 2026-11-23 on the 2026-11-11 nightly, after an update had removed
+the app: the files were copied through recovery ADB and the mod played again.
+The zip's own installer script was not run end to end yet.
+
 ### By hand (stock HAL)
 
 ```bash
@@ -234,10 +271,22 @@ credential:
 
 ## Upstream integration
 
-See [`upstream/`](upstream): the health shim is merged; for audio, the beckham
-maintainer prefers the stock HAL ("wayyyy better if you can make that work"),
-so the next step is a beckham change modeled on nash (blobs, fixups,
-`ro.hardware.audio.primary`), plus a decision on `force_use` (app vs
-framework/overlay). The CAF `mixer_paths` change
-([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943))
-would then be abandoned.
+See [`upstream/`](upstream) for the details.
+
+- Health shim (mod battery level): merged (2026-10-02).
+- Stock audio HAL: merged
+  ([506063](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506063),
+  2026-10-08), in official builds from 2026-10-14. The CAF `mixer_paths`
+  change ([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943))
+  was abandoned.
+- Framework changes that would make the app unnecessary and fix speakerphone,
+  uploaded as WIP and untested (no full build here), topic
+  [`beckham-analog-dock`](https://review.lineageos.org/q/topic:beckham-analog-dock):
+  - [506921](https://review.lineageos.org/c/LineageOS/android_frameworks_base/+/506921)
+    frameworks_base: `config_dockAudioUseAnalogDock` (default false) restores
+    `FORCE_ANALOG_DOCK` for dock media, as up to Android 13;
+  - [506922](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506922)
+    beckham overlay enabling it;
+  - [506923](https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/506923)
+    frameworks_av: speakerphone calls go to the analog dock when the device
+    opts in.

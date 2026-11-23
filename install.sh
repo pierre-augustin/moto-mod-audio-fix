@@ -17,7 +17,8 @@
 #   --caf        use the CAF HAL approach instead of the stock HAL
 #   --no-reboot  do not reboot / verify at the end
 #
-# Needs: adb, patchelf (for the health blob), curl and python3 (stock HAL),
+# Needs: adb, patchelf (only for the health blob on builds without the shim),
+# curl and python3 (stock HAL),
 # Developer options -> "Rooted debugging" enabled, phone connected over USB.
 set -e
 cd "$(dirname "$0")"
@@ -53,7 +54,6 @@ wait_boot() {
 }
 
 step "Checking the phone"
-command -v patchelf >/dev/null || die "patchelf not found (needed to patch the health blob)"
 adb get-state >/dev/null 2>&1 || die "no phone found by adb"
 adb root >/dev/null
 sleep 3
@@ -75,6 +75,7 @@ if [ "$(sh_adb "[ -f $BLOB.orig ] || grep -c libmothealth_shim.so $BLOB")" -gt 0
 fi
 if [ "$HEALTH" = 1 ]; then
     step "Building the health shim and patching the Motorola blob"
+    command -v patchelf >/dev/null || die "patchelf not found (needed to patch the health blob)"
     # Back up the pristine blob first: build.sh patches a copy of the .orig.
     sh_adb "[ -f $BLOB.orig ] || cp -p $BLOB $BLOB.orig"
     rm -rf health-shim/devlibs   # libraries may change with each LineageOS update

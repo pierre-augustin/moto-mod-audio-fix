@@ -2,6 +2,29 @@
 
 To: Nolen Johnson (`njohnson` on Gerrit), jro1979 (beckham maintainer)
 
+## Outcome (2026-11-27): everything is merged
+
+| Change | Project | What it does | Merged |
+|---|---|---|---|
+| [505961](https://review.lineageos.org/c/LineageOS/android_device_motorola_msm8998-common/+/505961), [505951](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505951) | msm8998-common, beckham | Health shim: mod battery level | 2026-10-02 |
+| [506063](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506063) | beckham | Brings back the stock audio HAL (native mod support, stereo) | 2026-10-08 |
+| [514849](https://review.lineageos.org/c/LineageOS/android_lineage-sdk/+/514849) | lineage-sdk | `config_dockAudioUseAnalogDock` (default false) | 2026-11-27 |
+| [506921](https://review.lineageos.org/c/LineageOS/android_frameworks_base/+/506921) | frameworks_base | `AudioService` uses `FORCE_ANALOG_DOCK` for dock media with that config | 2026-11-27 |
+| [506922](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506922) | beckham | Overlay enabling the config (nash and messi got the same) | 2026-11-27 |
+| [506923](https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/506923) | frameworks_av | Speakerphone calls go to the analog dock | 2026-11-27 |
+| [514871](https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/514871) | frameworks_av | Ringtones, alarms and other sonification sounds play on the analog dock alone (the HAL rejects the speaker + dock combination `0x802`) | 2026-11-27 |
+
+The last five form topic [`analog-dock`](https://review.lineageos.org/q/topic:analog-dock).
+With them, no workaround is needed: the ModAudioFix app can be uninstalled.
+The CAF approach described below ([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943),
+`modlinkd`) was abandoned in favor of the stock HAL.
+
+The patches in this folder are the drafts that led to these changes; the
+merged versions on Gerrit are the reference. 514849 and 514871 have no patch
+here.
+
+The rest of this document is the original proposal, kept for the diagnosis.
+
 ## Update (2026-10-02, evening): stock audio HAL
 
 Following the maintainer's preference for the stock audio HAL, it was tested on

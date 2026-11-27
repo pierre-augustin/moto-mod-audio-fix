@@ -9,7 +9,30 @@ userdebug, with a JBL SoundBoost: media plays on the mod **in stereo** after a
 cold reboot with no manual step, across pause/resume, detach/reattach, calls
 and user (profile) switches.
 
-## Recommended setup
+## Status: everything is now in LineageOS
+
+All the pieces are merged in LineageOS 22.2. The last ones, the framework
+changes of topic [`analog-dock`](https://review.lineageos.org/q/topic:analog-dock),
+were merged on 2026-11-27 (see [Upstream integration](#upstream-integration)).
+
+| Official build | What you need |
+|---|---|
+| First nightly built after 2026-11-27 and later | **Nothing**: media, ringtones, alarms and speakerphone calls play on the mod out of the box. Uninstall the app if you had it ([Uninstall](#uninstall)) |
+| 2026-10-14 to 2026-11-27 | The ModAudioFix app (media only, see the limitations below) |
+| Before 2026-10-14 | The full setup below |
+
+The framework changes were validated on 2026-11-27 on a test build with the
+whole topic, without the app: media, alarms, timers and incoming call ringtones
+play on the mod only; earpiece calls stay on the phone, and speakerphone
+switches to the mod (`mod-voice-speaker` calibration). This matches Motorola's
+stock behavior, checked on a Z2 Play (`albus`, stock Android 8): ringtones and
+alarms play only on the mod when it is attached. nash and messi get the same
+overlay.
+
+The rest of this README documents the workaround for older builds and how the
+problem was found.
+
+## Recommended setup (builds before the framework changes)
 
 | Piece | What it does | Where |
 |---|---|---|
@@ -22,10 +45,16 @@ needed**. Without USB debugging (for instance when a supervised Family Link
 account is the active profile), install it from recovery: see
 [From recovery](#from-recovery-no-usb-debugging-needed).
 
-Known limitation: **speakerphone during a call stays on the phone speaker**.
-On stock firmware the audio policy routes speakerphone calls to the dock and
-the HAL then uses `mod-voice-speaker`; on Android 15 the policy picks the phone
-speaker. A framework fix is proposed (see [Upstream integration](#upstream-integration)).
+Known limitations of the app, both fixed by the framework changes:
+- **Speakerphone during a call stays on the phone speaker.** On stock firmware
+  the audio policy routes speakerphone calls to the dock and the HAL then uses
+  `mod-voice-speaker`; on Android 15 the policy picks the phone speaker.
+- **Ringtones, alarms and timers are silent while the mod is attached.** With
+  `FORCE_ANALOG_DOCK`, the audio policy plays them on the speaker and the dock
+  together (`0x802`), a combination Motorola's HAL rejects
+  (`platform_get_output_snd_device: Invalid combo device(0x802)`). Detach the
+  mod to hear them.
+
 Earpiece calls, microphone, and media after a call (back on the mod) all work.
 
 ## Stock audio HAL
@@ -193,9 +222,10 @@ the directory and the `addon.d` script), owner root and context `system_file`.
 Writing to `/system` from recovery is safe on beckham's official builds:
 dm-verity is disabled there (the GApps `addon.d` relies on it too).
 
-Validated on 2026-11-23 on the 2026-11-11 nightly, after an update had removed
-the app: the files were copied through recovery ADB and the mod played again.
-The zip's own installer script was not run end to end yet.
+Validated with the zip itself on 2026-11-24 and 2026-11-27 (2026-11-18 and
+2026-11-25 nightlies, sideloaded after the ROM and GApps): the app is installed
+with its `addon.d` script, `Force use for dock` is 8 after boot and the mod
+plays.
 
 ### By hand (stock HAL)
 
@@ -242,6 +272,19 @@ with no `getModBatteryProperties fail!`.
 
 ## Uninstall
 
+On official builds with the framework changes, only the app has to go. If it
+was installed from recovery, also remove its `addon.d` script, or the next
+update puts the app back. From recovery (Advanced → Enable ADB), with `/system`
+mounted read-write as described in [From recovery](#from-recovery-no-usb-debugging-needed):
+
+```bash
+rm -rf <system>/priv-app/ModAudioFix \
+       <system>/etc/permissions/privapp-permissions-modaudiofix.xml \
+       <system>/addon.d/31-modaudiofix.sh
+```
+
+Full uninstall of the setup for older builds:
+
 ```bash
 adb root
 adb remount
@@ -279,14 +322,21 @@ See [`upstream/`](upstream) for the details.
   2026-10-08), in official builds from 2026-10-14. The CAF `mixer_paths`
   change ([505943](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/505943))
   was abandoned.
-- Framework changes that would make the app unnecessary and fix speakerphone,
-  uploaded as WIP and untested (no full build here), topic
-  [`beckham-analog-dock`](https://review.lineageos.org/q/topic:beckham-analog-dock):
+- Framework changes that make the app unnecessary and fix speakerphone and
+  ringtones: merged on 2026-11-27, topic
+  [`analog-dock`](https://review.lineageos.org/q/topic:analog-dock):
+  - [514849](https://review.lineageos.org/c/LineageOS/android_lineage-sdk/+/514849)
+    lineage-sdk: `config_dockAudioUseAnalogDock` (default false);
   - [506921](https://review.lineageos.org/c/LineageOS/android_frameworks_base/+/506921)
-    frameworks_base: `config_dockAudioUseAnalogDock` (default false) restores
-    `FORCE_ANALOG_DOCK` for dock media, as up to Android 13;
+    frameworks_base: with that config, `AudioService` uses `FORCE_ANALOG_DOCK`
+    for dock media, as up to Android 13;
   - [506922](https://review.lineageos.org/c/LineageOS/android_device_motorola_beckham/+/506922)
-    beckham overlay enabling it;
+    beckham overlay enabling it (nash and messi got the same overlay);
   - [506923](https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/506923)
-    frameworks_av: speakerphone calls go to the analog dock when the device
-    opts in.
+    frameworks_av: speakerphone calls go to the analog dock;
+  - [514871](https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/514871)
+    frameworks_av: ringtones, alarms and other sonification sounds play on the
+    analog dock alone, since the HAL rejects the speaker + dock combination.
+
+  The patches in `upstream/` are earlier drafts; the merged versions on Gerrit
+  are the reference.
